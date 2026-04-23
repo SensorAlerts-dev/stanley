@@ -181,3 +181,12 @@ describe('library schema', () => {
     });
   });
 });
+
+describe('LIBRARY_ROOT config', () => {
+  it('resolves LIBRARY_ROOT to an absolute path, defaulting to the ClaudeClaw flash drive', async () => {
+    // Dynamic import so we get a fresh evaluation under the test env
+    const config = await import('./config.js');
+    expect(config.LIBRARY_ROOT).toMatch(/claudeclaw-library$/);
+    expect(config.LIBRARY_ROOT.startsWith('/')).toBe(true);
+  });
+});

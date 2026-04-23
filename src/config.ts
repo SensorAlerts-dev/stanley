@@ -17,6 +17,7 @@ const envConfig = readEnvFile([
   'DASHBOARD_TOKEN',
   'DASHBOARD_URL',
   'CLAUDECLAW_CONFIG',
+  'LIBRARY_ROOT',
   'DB_ENCRYPTION_KEY',
   'GOOGLE_API_KEY',
   'AGENT_TIMEOUT_MS',
@@ -116,6 +117,22 @@ const rawConfigDir =
  * Defaults to ~/.claudeclaw. Set CLAUDECLAW_CONFIG in .env or environment to override.
  */
 export const CLAUDECLAW_CONFIG = expandHome(rawConfigDir);
+
+// ── Research library ────────────────────────────────────────────────
+// Root directory for the research library's files (screenshots, PDFs,
+// videos, audio). Defaults to the always-mounted flash drive on remy.
+// Files in item_media.file_path are stored **relative** to this path.
+
+const rawLibraryRoot =
+  process.env.LIBRARY_ROOT ||
+  envConfig.LIBRARY_ROOT ||
+  '/Volumes/ClaudeClaw/claudeclaw-library';
+
+/**
+ * Absolute path to the research library's file root.
+ * Defaults to /Volumes/ClaudeClaw/claudeclaw-library.
+ */
+export const LIBRARY_ROOT = expandHome(rawLibraryRoot);
 
 // Telegram limits
 export const MAX_MESSAGE_LENGTH = 4096;
