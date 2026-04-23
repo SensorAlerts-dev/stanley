@@ -355,6 +355,99 @@ function createSchema(database: Database.Database): void {
       total_cost  REAL NOT NULL DEFAULT 0,
       created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
     );
+
+    -- ── Research Library (Phase 1) ────────────────────────────────────
+    -- See docs/superpowers/specs/2026-04-23-research-library-schema-design.md
+
+    CREATE TABLE IF NOT EXISTS library_items (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      agent_id      TEXT NOT NULL DEFAULT 'collector',
+      chat_id       TEXT NOT NULL DEFAULT '',
+      source_type   TEXT NOT NULL CHECK (source_type IN (
+        'tiktok','instagram','facebook','reddit','twitter','youtube','threads',
+        'linkedin','article','screenshot','file','note','voice','forwarded'
+      )),
+      url           TEXT,
+      url_hash      TEXT,
+      title         TEXT,
+      author        TEXT,
+      captured_at   INTEGER NOT NULL,
+      last_seen_at  INTEGER,
+      project       TEXT NOT NULL DEFAULT 'general'
+                    CHECK (project IN ('pure_bliss','octohive','personal','general')),
+      user_note     TEXT,
+      source_meta   TEXT,
+      reviewed_at   INTEGER,
+      pinned        INTEGER NOT NULL DEFAULT 0,
+      enriched_at   INTEGER,
+      related_at    INTEGER,
+      analyzed_at   INTEGER,
+      created_at    INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS item_media (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id         INTEGER NOT NULL,
+      media_type      TEXT NOT NULL CHECK (media_type IN ('image','video','pdf','audio','other')),
+      file_path       TEXT,
+      storage         TEXT NOT NULL DEFAULT 'local'
+                      CHECK (storage IN ('local','drive','both')),
+      drive_file_id   TEXT,
+      drive_url       TEXT,
+      mime_type       TEXT,
+      bytes           INTEGER,
+      ocr_text        TEXT,
+      created_at      INTEGER NOT NULL,
+      FOREIGN KEY (item_id) REFERENCES library_items(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS item_content (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      item_id       INTEGER NOT NULL,
+      content_type  TEXT NOT NULL CHECK (content_type IN ('ocr','scraped_summary','transcript','user_note')),
+      text          TEXT NOT NULL,
+      source_agent  TEXT,
+      token_count   INTEGER,
+      created_at    INTEGER NOT NULL,
+      FOREIGN KEY (item_id) REFERENCES library_items(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS item_tags (
+      item_id       INTEGER NOT NULL,
+      tag           TEXT NOT NULL,
+      tag_type      TEXT NOT NULL CHECK (tag_type IN ('topic','person','brand','hashtag','mood','other')),
+      confidence    REAL,
+      source_agent  TEXT,
+      created_at    INTEGER NOT NULL,
+      PRIMARY KEY (item_id, tag, tag_type),
+      FOREIGN KEY (item_id) REFERENCES library_items(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS item_relationships (
+      id                INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_item_id    INTEGER NOT NULL,
+      target_item_id    INTEGER NOT NULL,
+      relation_type     TEXT NOT NULL CHECK (relation_type IN (
+        'same_topic','same_author','similar_semantic','cites','manual_link','duplicate'
+      )),
+      similarity_score  REAL,
+      reason            TEXT,
+      source_agent      TEXT,
+      created_at        INTEGER NOT NULL,
+      UNIQUE (source_item_id, target_item_id, relation_type),
+      FOREIGN KEY (source_item_id) REFERENCES library_items(id) ON DELETE CASCADE,
+      FOREIGN KEY (target_item_id) REFERENCES library_items(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS item_embeddings (
+      item_id            INTEGER PRIMARY KEY,
+      model              TEXT NOT NULL,
+      dimensions         INTEGER NOT NULL,
+      embedding          BLOB NOT NULL,
+      source_text_hash   TEXT,
+      created_at         INTEGER NOT NULL,
+      FOREIGN KEY (item_id) REFERENCES library_items(id) ON DELETE CASCADE
+    );
   `);
 }
 
@@ -367,6 +460,7 @@ export function initDatabase(): void {
 
   db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
   createSchema(db);
   runMigrations(db);
 
@@ -628,8 +722,14 @@ export function _initTestDatabase(): void {
   encryptionKey = crypto.randomBytes(32);
   db = new Database(':memory:');
   db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
   createSchema(db);
   runMigrations(db);
+}
+
+/** @internal - for tests only. Returns the active database handle. */
+export function _getTestDb(): Database.Database {
+  return db;
 }
 
 export function getSession(chatId: string, agentId = 'main'): string | undefined {
