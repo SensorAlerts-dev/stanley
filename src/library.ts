@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { _getTestDb } from './db.js';
 
 // ── URL canonicalization ──────────────────────────────────────────────
 // Produces a stable string for dedup. Lower-case scheme+host, strip trailing
@@ -105,4 +106,92 @@ export function inferProject(text: string, url?: string): Project {
     if (haystack.includes(kw)) return 'pure_bliss';
   }
   return 'general';
+}
+
+// ── Types ───────────────────────────────────────────────────────────────
+export type SourceType =
+  | 'tiktok' | 'instagram' | 'facebook' | 'reddit' | 'twitter'
+  | 'youtube' | 'threads' | 'linkedin' | 'article' | 'screenshot'
+  | 'file' | 'note' | 'voice' | 'forwarded';
+
+export interface InsertItemOpts {
+  source_type: SourceType;
+  url?: string | null;
+  user_note?: string | null;
+  user_message?: string | null;
+  project?: Project;
+  title?: string | null;
+  author?: string | null;
+  captured_at?: number;
+  source_meta?: Record<string, unknown> | null;
+  enriched_at?: number | null;
+  agent_id?: string;
+  chat_id?: string;
+}
+
+export interface InsertItemResult {
+  id: number;
+  is_duplicate: boolean;
+  existing_id?: number;
+  last_seen_at_before?: number;
+}
+
+export function insertItem(opts: InsertItemOpts): InsertItemResult {
+  const db = _getTestDb();
+  const now = Math.floor(Date.now() / 1000);
+  const canonical = opts.url ? canonicalizeUrl(opts.url) : null;
+  const hash = canonical ? urlHash(canonical) : null;
+
+  if (hash) {
+    const existing = db.prepare(`
+      SELECT id, user_note, last_seen_at FROM library_items WHERE url_hash = ?
+    `).get(hash) as { id: number; user_note: string | null; last_seen_at: number | null } | undefined;
+
+    if (existing) {
+      const existingNote = existing.user_note ?? '';
+      const incomingNote = opts.user_note?.trim() ?? '';
+      const mergedNote =
+        incomingNote.length > 0
+          ? (existingNote.length > 0 ? `${existingNote}\n---\n${incomingNote}` : incomingNote)
+          : existingNote;
+
+      db.prepare(`
+        UPDATE library_items
+        SET user_note = ?, last_seen_at = ?
+        WHERE id = ?
+      `).run(mergedNote, now, existing.id);
+
+      return {
+        id: existing.id,
+        is_duplicate: true,
+        existing_id: existing.id,
+        last_seen_at_before: existing.last_seen_at ?? undefined,
+      };
+    }
+  }
+
+  const info = db.prepare(`
+    INSERT INTO library_items (
+      agent_id, chat_id, source_type, url, url_hash, title, author,
+      captured_at, last_seen_at, project, user_note, source_meta,
+      enriched_at, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    opts.agent_id ?? 'collector',
+    opts.chat_id ?? '',
+    opts.source_type,
+    canonical,
+    hash,
+    opts.title ?? null,
+    opts.author ?? null,
+    opts.captured_at ?? now,
+    opts.captured_at ?? now,
+    opts.project ?? 'general',
+    opts.user_note ?? null,
+    opts.source_meta ? JSON.stringify(opts.source_meta) : null,
+    opts.enriched_at ?? null,
+    now,
+  );
+
+  return { id: info.lastInsertRowid as number, is_duplicate: false };
 }

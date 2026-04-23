@@ -607,6 +607,90 @@ describe('library.ts project inference', () => {
   });
 });
 
+describe('library.ts insertItem', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('inserts a minimal library_item and returns its id', async () => {
+    const { insertItem } = await import('./library.js');
+    const res = insertItem({ source_type: 'note', user_note: 'hello' });
+    expect(res.id).toBeGreaterThan(0);
+    expect(res.is_duplicate).toBe(false);
+    expect(res.existing_id).toBeUndefined();
+  });
+
+  it('computes url_hash when url is provided', async () => {
+    const { insertItem, urlHash, canonicalizeUrl } = await import('./library.js');
+    const res = insertItem({ source_type: 'article', url: 'https://example.com/x' });
+    const db = (await import('./db.js'))._getTestDb();
+    const row = db.prepare(`SELECT url, url_hash FROM library_items WHERE id = ?`).get(res.id) as { url: string; url_hash: string };
+    expect(row.url).toBe('https://example.com/x');
+    expect(row.url_hash).toBe(urlHash(canonicalizeUrl('https://example.com/x')));
+  });
+
+  it('re-inserting the same URL returns is_duplicate with existing_id', async () => {
+    const { insertItem } = await import('./library.js');
+    const first = insertItem({ source_type: 'article', url: 'https://example.com/a' });
+    const second = insertItem({ source_type: 'article', url: 'https://example.com/a', user_note: 'extra' });
+    expect(second.is_duplicate).toBe(true);
+    expect(second.id).toBe(first.id);
+    expect(second.existing_id).toBe(first.id);
+  });
+
+  it('duplicate insert appends user_note with separator and bumps last_seen_at', async () => {
+    const { insertItem } = await import('./library.js');
+    const db = (await import('./db.js'))._getTestDb();
+    const first = insertItem({ source_type: 'article', url: 'https://example.com/a', user_note: 'first note' });
+    const originalSeenAt = (db.prepare(`SELECT last_seen_at FROM library_items WHERE id = ?`).get(first.id) as { last_seen_at: number }).last_seen_at;
+
+    insertItem({ source_type: 'article', url: 'https://example.com/a', user_note: 'second note' });
+
+    const row = db.prepare(`SELECT user_note, last_seen_at FROM library_items WHERE id = ?`).get(first.id) as { user_note: string; last_seen_at: number };
+    expect(row.user_note).toBe('first note\n---\nsecond note');
+    expect(row.last_seen_at).toBeGreaterThanOrEqual(originalSeenAt);
+  });
+
+  it('duplicate insert with no new user_note leaves existing note alone', async () => {
+    const { insertItem } = await import('./library.js');
+    const db = (await import('./db.js'))._getTestDb();
+    insertItem({ source_type: 'article', url: 'https://example.com/a', user_note: 'only note' });
+    insertItem({ source_type: 'article', url: 'https://example.com/a' });
+    const row = db.prepare(`SELECT user_note FROM library_items WHERE url = ?`).get('https://example.com/a') as { user_note: string };
+    expect(row.user_note).toBe('only note');
+  });
+
+  it('stores source_meta as JSON string', async () => {
+    const { insertItem } = await import('./library.js');
+    const db = (await import('./db.js'))._getTestDb();
+    const res = insertItem({
+      source_type: 'tiktok',
+      url: 'https://tiktok.com/@x/video/1',
+      source_meta: { views: 2100000, likes: 80000 },
+    });
+    const row = db.prepare(`SELECT source_meta FROM library_items WHERE id = ?`).get(res.id) as { source_meta: string };
+    expect(JSON.parse(row.source_meta)).toEqual({ views: 2100000, likes: 80000 });
+  });
+
+  it('sets enriched_at when opts.enriched_at is provided', async () => {
+    const { insertItem } = await import('./library.js');
+    const db = (await import('./db.js'))._getTestDb();
+    const now = Math.floor(Date.now() / 1000);
+    const res = insertItem({ source_type: 'note', enriched_at: now });
+    const row = db.prepare(`SELECT enriched_at FROM library_items WHERE id = ?`).get(res.id) as { enriched_at: number };
+    expect(row.enriched_at).toBe(now);
+  });
+
+  it('multiple NULL-URL inserts (notes) all succeed', async () => {
+    const { insertItem } = await import('./library.js');
+    const a = insertItem({ source_type: 'note', user_note: 'A' });
+    const b = insertItem({ source_type: 'note', user_note: 'B' });
+    const c = insertItem({ source_type: 'voice' });
+    expect(a.id).not.toBe(b.id);
+    expect(b.id).not.toBe(c.id);
+  });
+});
+
 describe('library CHECK constraints', () => {
   beforeEach(() => {
     _initTestDatabase();
