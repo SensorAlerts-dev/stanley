@@ -2,13 +2,22 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { execFileSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const CLI = path.join(PROJECT_ROOT, 'dist', 'library-cli.js');
 
+// Each test run gets its own isolated DB directory. The CLI subprocess
+// is spawned with CLAUDECLAW_STORE_DIR pointing here so it never touches
+// the real store/claudeclaw.db under the project root.
+const TEST_STORE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'lib-cli-test-'));
+
 function runCli(args: string[]): { stdout: string; stderr: string; exitCode: number } {
   try {
-    const stdout = execFileSync('node', [CLI, ...args], { encoding: 'utf-8' });
+    const stdout = execFileSync('node', [CLI, ...args], {
+      encoding: 'utf-8',
+      env: { ...process.env, CLAUDECLAW_STORE_DIR: TEST_STORE_DIR },
+    });
     return { stdout, stderr: '', exitCode: 0 };
   } catch (e: unknown) {
     const err = e as { stdout?: Buffer; stderr?: Buffer; status?: number };
@@ -104,7 +113,7 @@ describe('library-cli save (no media)', () => {
     const out = JSON.parse(stdout);
     expect(out.id).toBeGreaterThan(0);
     const Database = (await import('better-sqlite3')).default;
-    const db = new Database(path.join(PROJECT_ROOT, 'store', 'claudeclaw.db'), { readonly: true });
+    const db = new Database(path.join(TEST_STORE_DIR, 'claudeclaw.db'), { readonly: true });
     const tags = db.prepare(`SELECT tag FROM item_tags WHERE item_id = ?`).all(out.id) as Array<{ tag: string }>;
     expect(tags.map(t => t.tag)).toContain('@testcreator');
     db.close();
@@ -120,7 +129,7 @@ describe('library-cli save (no media)', () => {
     const out = JSON.parse(stdout);
     expect(out.id).toBeGreaterThan(0);
     const Database = (await import('better-sqlite3')).default;
-    const db = new Database(path.join(PROJECT_ROOT, 'store', 'claudeclaw.db'), { readonly: true });
+    const db = new Database(path.join(TEST_STORE_DIR, 'claudeclaw.db'), { readonly: true });
     const rows = db.prepare(`SELECT text FROM item_content WHERE item_id = ?`).all(out.id) as Array<{ text: string }>;
     expect(rows.map(r => r.text)).toContain('A brief summary of the article');
     db.close();
@@ -135,7 +144,7 @@ describe('library-cli save (no media)', () => {
     ]);
     const out = JSON.parse(stdout);
     const Database = (await import('better-sqlite3')).default;
-    const db = new Database(path.join(PROJECT_ROOT, 'store', 'claudeclaw.db'), { readonly: true });
+    const db = new Database(path.join(TEST_STORE_DIR, 'claudeclaw.db'), { readonly: true });
     const tasks = db.prepare(`SELECT prompt FROM mission_tasks WHERE assigned_agent = 'processor' AND prompt LIKE ?`).all('%' + out.id + '%') as Array<{ prompt: string }>;
     expect(tasks.length).toBeGreaterThan(0);
     db.close();
@@ -151,7 +160,7 @@ describe('library-cli save (no media)', () => {
     ]);
     const out = JSON.parse(stdout);
     const Database = (await import('better-sqlite3')).default;
-    const db = new Database(path.join(PROJECT_ROOT, 'store', 'claudeclaw.db'), { readonly: true });
+    const db = new Database(path.join(TEST_STORE_DIR, 'claudeclaw.db'), { readonly: true });
     const row = db.prepare(`SELECT enriched_at FROM library_items WHERE id = ?`).get(out.id) as { enriched_at: number | null };
     expect(row.enriched_at).toBeGreaterThan(0);
     db.close();
@@ -181,7 +190,7 @@ describe('library-cli save with --media-temp-path', () => {
     expect(fs.existsSync(tempFile)).toBe(false);  // moved
 
     const Database = (await import('better-sqlite3')).default;
-    const db = new Database(path.join(PROJECT_ROOT, 'store', 'claudeclaw.db'), { readonly: true });
+    const db = new Database(path.join(TEST_STORE_DIR, 'claudeclaw.db'), { readonly: true });
     const media = db.prepare(`SELECT file_path, media_type, storage FROM item_media WHERE item_id = ?`).get(out.id) as { file_path: string; media_type: string; storage: string };
     expect(media.media_type).toBe('image');
     expect(media.storage).toBe('local');
@@ -289,7 +298,7 @@ describe('library-cli delete / update', () => {
     expect(opened.enriched_at).toBeNull();
 
     const Database = (await import('better-sqlite3')).default;
-    const db = new Database(path.join(PROJECT_ROOT, 'store', 'claudeclaw.db'), { readonly: true });
+    const db = new Database(path.join(TEST_STORE_DIR, 'claudeclaw.db'), { readonly: true });
     const tasks = db.prepare(`SELECT prompt FROM mission_tasks WHERE assigned_agent = 'processor' AND prompt LIKE ?`).all('%' + saveRes.id + '%') as Array<{ prompt: string }>;
     expect(tasks.length).toBeGreaterThan(0);
     db.close();
@@ -309,12 +318,12 @@ describe('library-cli save auto-logs hive_mind', () => {
     const uniqueNote = 'hive-mind-test-' + Date.now();
     const result = execFileSync('node', [CLI, 'save', '--source-type', 'note', '--user-note', uniqueNote], {
       encoding: 'utf-8',
-      env: { ...process.env, CLAUDECLAW_AGENT_ID: 'memobot' },
+      env: { ...process.env, CLAUDECLAW_AGENT_ID: 'memobot', CLAUDECLAW_STORE_DIR: TEST_STORE_DIR },
     });
     const saved = JSON.parse(result);
 
     const Database = (await import('better-sqlite3')).default;
-    const db = new Database(path.join(PROJECT_ROOT, 'store', 'claudeclaw.db'), { readonly: true });
+    const db = new Database(path.join(TEST_STORE_DIR, 'claudeclaw.db'), { readonly: true });
     const rows = db.prepare(
       `SELECT agent_id, action, summary FROM hive_mind WHERE summary LIKE ? ORDER BY id DESC LIMIT 1`,
     ).all('%#' + saved.id + '%') as Array<{ agent_id: string; action: string; summary: string }>;
@@ -329,12 +338,12 @@ describe('library-cli save auto-logs hive_mind', () => {
     const uniqueNote = 'no-hive-test-' + Date.now();
     const result = execFileSync('node', [CLI, 'save', '--source-type', 'note', '--user-note', uniqueNote, '--no-hive-mind'], {
       encoding: 'utf-8',
-      env: { ...process.env, CLAUDECLAW_AGENT_ID: 'memobot' },
+      env: { ...process.env, CLAUDECLAW_AGENT_ID: 'memobot', CLAUDECLAW_STORE_DIR: TEST_STORE_DIR },
     });
     const saved = JSON.parse(result);
 
     const Database = (await import('better-sqlite3')).default;
-    const db = new Database(path.join(PROJECT_ROOT, 'store', 'claudeclaw.db'), { readonly: true });
+    const db = new Database(path.join(TEST_STORE_DIR, 'claudeclaw.db'), { readonly: true });
     const rows = db.prepare(
       `SELECT COUNT(*) AS n FROM hive_mind WHERE summary LIKE ?`,
     ).get('%#' + saved.id + '%') as { n: number };
@@ -366,7 +375,7 @@ describe('library-cli save --auto-scrape', () => {
     expect(out.id).toBeGreaterThan(0);
 
     const Database = (await import('better-sqlite3')).default;
-    const db = new Database(path.join(PROJECT_ROOT, 'store', 'claudeclaw.db'), { readonly: true });
+    const db = new Database(path.join(TEST_STORE_DIR, 'claudeclaw.db'), { readonly: true });
     const row = db.prepare(`SELECT title, enriched_at FROM library_items WHERE id = ?`).get(out.id) as { title: string | null; enriched_at: number | null };
     expect(row.title).toBeNull();
     expect(row.enriched_at).toBeNull();

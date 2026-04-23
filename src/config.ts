@@ -94,7 +94,13 @@ const __dirname = path.dirname(__filename);
 // The SDK uses this as cwd, which causes Claude Code to load our CLAUDE.md
 // and all global skills from ~/.claude/skills/ via settingSources.
 export const PROJECT_ROOT = path.resolve(__dirname, '..');
-export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
+
+// STORE_DIR: where SQLite lives. Defaults to <project>/store. Overridable
+// via CLAUDECLAW_STORE_DIR env var so test harnesses can spawn library-cli
+// subprocesses against a throwaway DB instead of polluting production data.
+export const STORE_DIR = process.env.CLAUDECLAW_STORE_DIR
+  ? path.resolve(process.env.CLAUDECLAW_STORE_DIR)
+  : path.resolve(PROJECT_ROOT, 'store');
 
 // ── External config directory ────────────────────────────────────────
 // Personal config files (CLAUDE.md, agent.yaml, agent CLAUDE.md) can live
