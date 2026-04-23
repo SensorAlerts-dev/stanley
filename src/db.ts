@@ -471,6 +471,31 @@ function createSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_item_tags_tag            ON item_tags(tag, tag_type);
     CREATE INDEX IF NOT EXISTS idx_item_relationships_source ON item_relationships(source_item_id);
     CREATE INDEX IF NOT EXISTS idx_item_relationships_target ON item_relationships(target_item_id);
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS item_content_fts USING fts5(
+      text,
+      item_id UNINDEXED,
+      content_type UNINDEXED,
+      content=item_content,
+      content_rowid=id
+    );
+
+    CREATE TRIGGER IF NOT EXISTS item_content_fts_insert AFTER INSERT ON item_content BEGIN
+      INSERT INTO item_content_fts(rowid, text, item_id, content_type)
+        VALUES (new.id, new.text, new.item_id, new.content_type);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS item_content_fts_delete AFTER DELETE ON item_content BEGIN
+      INSERT INTO item_content_fts(item_content_fts, rowid, text, item_id, content_type)
+        VALUES ('delete', old.id, old.text, old.item_id, old.content_type);
+    END;
+
+    CREATE TRIGGER IF NOT EXISTS item_content_fts_update AFTER UPDATE ON item_content BEGIN
+      INSERT INTO item_content_fts(item_content_fts, rowid, text, item_id, content_type)
+        VALUES ('delete', old.id, old.text, old.item_id, old.content_type);
+      INSERT INTO item_content_fts(rowid, text, item_id, content_type)
+        VALUES (new.id, new.text, new.item_id, new.content_type);
+    END;
   `);
 }
 

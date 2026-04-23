@@ -110,4 +110,74 @@ describe('library schema', () => {
       expect(getIndexes(db, 'item_relationships')).toContain('idx_item_relationships_target');
     });
   });
+
+  describe('FTS5 virtual table', () => {
+    it('creates item_content_fts virtual table', () => {
+      const db = _getTestDb();
+      const tables = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='item_content_fts'`)
+        .all() as Array<{ name: string }>;
+      expect(tables.length).toBe(1);
+    });
+
+    it('inserting into item_content makes row searchable via FTS', () => {
+      const db = _getTestDb();
+      const now = Math.floor(Date.now() / 1000);
+      const itemId = (db.prepare(`
+        INSERT INTO library_items (source_type, captured_at, project, created_at)
+        VALUES ('note', ?, 'general', ?)
+      `).run(now, now).lastInsertRowid as number);
+
+      db.prepare(`
+        INSERT INTO item_content (item_id, content_type, text, created_at)
+        VALUES (?, 'user_note', 'the brown kefir water ferments', ?)
+      `).run(itemId, now);
+
+      const hits = db.prepare(`
+        SELECT item_id FROM item_content_fts WHERE item_content_fts MATCH 'kefir'
+      `).all() as Array<{ item_id: number }>;
+      expect(hits.length).toBe(1);
+      expect(hits[0].item_id).toBe(itemId);
+    });
+
+    it('updating item_content re-indexes FTS', () => {
+      const db = _getTestDb();
+      const now = Math.floor(Date.now() / 1000);
+      const itemId = (db.prepare(`
+        INSERT INTO library_items (source_type, captured_at, project, created_at)
+        VALUES ('note', ?, 'general', ?)
+      `).run(now, now).lastInsertRowid as number);
+
+      const contentId = (db.prepare(`
+        INSERT INTO item_content (item_id, content_type, text, created_at)
+        VALUES (?, 'user_note', 'original text about cats', ?)
+      `).run(itemId, now).lastInsertRowid as number);
+
+      db.prepare(`UPDATE item_content SET text = ? WHERE id = ?`)
+        .run('updated text about dogs', contentId);
+
+      const catHits = db.prepare(`SELECT item_id FROM item_content_fts WHERE item_content_fts MATCH 'cats'`).all();
+      const dogHits = db.prepare(`SELECT item_id FROM item_content_fts WHERE item_content_fts MATCH 'dogs'`).all();
+      expect(catHits.length).toBe(0);
+      expect(dogHits.length).toBe(1);
+    });
+
+    it('deleting item_content removes FTS row', () => {
+      const db = _getTestDb();
+      const now = Math.floor(Date.now() / 1000);
+      const itemId = (db.prepare(`
+        INSERT INTO library_items (source_type, captured_at, project, created_at)
+        VALUES ('note', ?, 'general', ?)
+      `).run(now, now).lastInsertRowid as number);
+
+      const contentId = (db.prepare(`
+        INSERT INTO item_content (item_id, content_type, text, created_at)
+        VALUES (?, 'user_note', 'about penguins', ?)
+      `).run(itemId, now).lastInsertRowid as number);
+
+      db.prepare(`DELETE FROM item_content WHERE id = ?`).run(contentId);
+
+      const hits = db.prepare(`SELECT item_id FROM item_content_fts WHERE item_content_fts MATCH 'penguins'`).all();
+      expect(hits.length).toBe(0);
+    });
+  });
 });
