@@ -3,7 +3,7 @@ import path from 'path';
 
 import { query } from '@anthropic-ai/claude-agent-sdk';
 
-import { AGENT_MAX_TURNS, PROJECT_ROOT, agentCwd } from './config.js';
+import { AGENT_ID, AGENT_MAX_TURNS, PROJECT_ROOT, agentCwd } from './config.js';
 import { readEnvFile } from './env.js';
 import { classifyError, AgentError } from './errors.js';
 import { logger } from './logger.js';
@@ -218,6 +218,17 @@ export async function runAgent(
     // SDK Options.mcpServers expects Record<string, McpServerConfig>
     const mcpServerSpecs = mcpServerNames.length > 0 ? mcpServers : undefined;
 
+    // Memobot is a capture-only collector. WebFetch/WebSearch tempt the
+    // model into scraping URLs itself and producing rich replies instead
+    // of calling library-cli save. Disable those tools for memobot only;
+    // every other agent keeps the full default toolset. Task (Agent
+    // dispatch) is also blocked because memobot has no use for sub-agent
+    // delegation and it's another way to burn the turn.
+    const disallowedTools: string[] | undefined =
+      AGENT_ID === 'memobot'
+        ? ['WebFetch', 'WebSearch', 'Task']
+        : undefined;
+
     for await (const event of query({
       prompt: singleTurn(message),
       options: {
@@ -244,6 +255,10 @@ export async function runAgent(
 
         // MCP servers loaded from .claude/settings.json and ~/.claude/settings.json
         ...(mcpServerSpecs ? { mcpServers: mcpServerSpecs } : {}),
+
+        // Per-agent tool blocklist (see disallowedTools above). Only
+        // applied for agents that need it (memobot).
+        ...(disallowedTools ? { disallowedTools } : {}),
 
         // Stream partial text so Telegram can show progressive updates
         includePartialMessages: !!onStreamText,
