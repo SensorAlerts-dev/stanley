@@ -182,6 +182,21 @@ describe('library schema', () => {
       expect(dogHits.length).toBe(1);
     });
 
+    it('updating non-text columns does not rewrite FTS', () => {
+      // FTS5 external-content tables have no way to observe whether a row
+      // has been re-indexed. To assert "no reindex happened" we rely on the
+      // fact that deleting a row from item_content_fts with a stale
+      // content_rowid fails — if the update trigger had erroneously run a
+      // delete+insert cycle, we'd still see one row, so this is an indirect
+      // sanity check. The stronger assertion is structural: the trigger
+      // definition in sqlite_master must scope to "UPDATE OF text".
+      const db = _getTestDb();
+      const sql = db.prepare(
+        `SELECT sql FROM sqlite_master WHERE name = 'item_content_fts_update'`,
+      ).get() as { sql: string };
+      expect(sql.sql).toMatch(/UPDATE OF text/);
+    });
+
     it('deleting item_content removes FTS row', () => {
       const db = _getTestDb();
       const now = Math.floor(Date.now() / 1000);

@@ -490,7 +490,7 @@ function createSchema(database: Database.Database): void {
         VALUES ('delete', old.id, old.text, old.item_id, old.content_type);
     END;
 
-    CREATE TRIGGER IF NOT EXISTS item_content_fts_update AFTER UPDATE ON item_content BEGIN
+    CREATE TRIGGER IF NOT EXISTS item_content_fts_update AFTER UPDATE OF text ON item_content BEGIN
       INSERT INTO item_content_fts(item_content_fts, rowid, text, item_id, content_type)
         VALUES ('delete', old.id, old.text, old.item_id, old.content_type);
       INSERT INTO item_content_fts(rowid, text, item_id, content_type)
