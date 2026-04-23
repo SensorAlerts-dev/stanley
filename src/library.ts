@@ -275,3 +275,34 @@ export function addTag(itemId: number, opts: AddTagOpts): void {
     VALUES (?, ?, ?, ?, ?, ?)
   `).run(itemId, opts.tag, opts.tag_type, opts.confidence ?? null, opts.source_agent, now);
 }
+
+// ── Lifecycle setters ──────────────────────────────────────────────────
+export function markEnriched(itemId: number, at?: number): void {
+  const db = getDb();
+  db.prepare(`UPDATE library_items SET enriched_at = ? WHERE id = ?`)
+    .run(at ?? Math.floor(Date.now() / 1000), itemId);
+}
+
+export function markReviewed(itemId: number, at?: number): void {
+  const db = getDb();
+  db.prepare(`UPDATE library_items SET reviewed_at = ? WHERE id = ?`)
+    .run(at ?? Math.floor(Date.now() / 1000), itemId);
+}
+
+export function setPinned(itemId: number, pinned: boolean): void {
+  const db = getDb();
+  db.prepare(`UPDATE library_items SET pinned = ? WHERE id = ?`)
+    .run(pinned ? 1 : 0, itemId);
+}
+
+export function setProject(itemId: number, project: Project): void {
+  const db = getDb();
+  // Schema CHECK constraint will reject invalid values with a clear error.
+  db.prepare(`UPDATE library_items SET project = ? WHERE id = ?`)
+    .run(project, itemId);
+}
+
+export function deleteItem(itemId: number): void {
+  const db = getDb();
+  db.prepare(`DELETE FROM library_items WHERE id = ?`).run(itemId);
+}

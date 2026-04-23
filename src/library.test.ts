@@ -858,3 +858,78 @@ describe('library.ts satellite helpers', () => {
     }).not.toThrow();
   });
 });
+
+describe('library.ts lifecycle setters', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('markEnriched sets enriched_at to given timestamp', async () => {
+    const { insertItem, markEnriched, _getTestDb: getDb } = await import('./library.js');
+    const db = getDb();
+    const item = insertItem({ source_type: 'note' });
+    const ts = 1800000000;
+    markEnriched(item.id, ts);
+    const row = db.prepare(`SELECT enriched_at FROM library_items WHERE id = ?`).get(item.id) as { enriched_at: number };
+    expect(row.enriched_at).toBe(ts);
+  });
+
+  it('markEnriched defaults to now when no timestamp given', async () => {
+    const { insertItem, markEnriched, _getTestDb: getDb } = await import('./library.js');
+    const db = getDb();
+    const item = insertItem({ source_type: 'note' });
+    const before = Math.floor(Date.now() / 1000);
+    markEnriched(item.id);
+    const row = db.prepare(`SELECT enriched_at FROM library_items WHERE id = ?`).get(item.id) as { enriched_at: number };
+    expect(row.enriched_at).toBeGreaterThanOrEqual(before);
+  });
+
+  it('markReviewed sets reviewed_at', async () => {
+    const { insertItem, markReviewed, _getTestDb: getDb } = await import('./library.js');
+    const db = getDb();
+    const item = insertItem({ source_type: 'note' });
+    markReviewed(item.id, 1800000000);
+    const row = db.prepare(`SELECT reviewed_at FROM library_items WHERE id = ?`).get(item.id) as { reviewed_at: number };
+    expect(row.reviewed_at).toBe(1800000000);
+  });
+
+  it('setPinned toggles the pinned flag', async () => {
+    const { insertItem, setPinned, _getTestDb: getDb } = await import('./library.js');
+    const db = getDb();
+    const item = insertItem({ source_type: 'note' });
+    setPinned(item.id, true);
+    expect((db.prepare(`SELECT pinned FROM library_items WHERE id = ?`).get(item.id) as { pinned: number }).pinned).toBe(1);
+    setPinned(item.id, false);
+    expect((db.prepare(`SELECT pinned FROM library_items WHERE id = ?`).get(item.id) as { pinned: number }).pinned).toBe(0);
+  });
+
+  it('setProject updates project column', async () => {
+    const { insertItem, setProject, _getTestDb: getDb } = await import('./library.js');
+    const db = getDb();
+    const item = insertItem({ source_type: 'note', project: 'general' });
+    setProject(item.id, 'pure_bliss');
+    expect((db.prepare(`SELECT project FROM library_items WHERE id = ?`).get(item.id) as { project: string }).project).toBe('pure_bliss');
+  });
+
+  it('setProject rejects invalid project', async () => {
+    const { insertItem, setProject } = await import('./library.js');
+    const item = insertItem({ source_type: 'note' });
+    expect(() => setProject(item.id, 'invalid_project' as never)).toThrow();
+  });
+
+  it('deleteItem cascades to satellites', async () => {
+    const { insertItem, addMedia, addContent, addTag, deleteItem, _getTestDb: getDb } = await import('./library.js');
+    const db = getDb();
+    const item = insertItem({ source_type: 'article', url: 'https://example.com/a' });
+    addMedia(item.id, { media_type: 'image', file_path: 'x.png', storage: 'local' });
+    addContent(item.id, { content_type: 'user_note', text: 'hi', source_agent: 'memobot' });
+    addTag(item.id, { tag: 'x', tag_type: 'topic', source_agent: 'memobot' });
+
+    deleteItem(item.id);
+
+    expect((db.prepare(`SELECT COUNT(*) AS n FROM library_items WHERE id = ?`).get(item.id) as { n: number }).n).toBe(0);
+    expect((db.prepare(`SELECT COUNT(*) AS n FROM item_media WHERE item_id = ?`).get(item.id) as { n: number }).n).toBe(0);
+    expect((db.prepare(`SELECT COUNT(*) AS n FROM item_content WHERE item_id = ?`).get(item.id) as { n: number }).n).toBe(0);
+    expect((db.prepare(`SELECT COUNT(*) AS n FROM item_tags WHERE item_id = ?`).get(item.id) as { n: number }).n).toBe(0);
+  });
+});
