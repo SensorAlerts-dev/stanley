@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type Database from 'better-sqlite3';
-import { _initTestDatabase, _getTestDb } from './db.js';
+import { _initTestDatabase, _getTestDb, _reapplyTestSchema } from './db.js';
 
 // Raw schema introspection: fresh in-memory DB per test via _initTestDatabase(),
 // then query sqlite_master / PRAGMA to verify tables, indexes, and triggers exist.
@@ -446,38 +446,49 @@ describe('library url_hash uniqueness', () => {
 });
 
 describe('library schema on existing database', () => {
-  it('re-running createSchema on a populated DB adds library tables without data loss', () => {
+  // No beforeEach: this test deliberately runs _initTestDatabase() once and
+  // then simulates a second boot via _reapplyTestSchema() to verify that
+  // rerunning createSchema on a populated DB does not drop any data.
+  it('re-running createSchema on a populated DB preserves existing data', () => {
     _initTestDatabase();
     const db = _getTestDb();
     const now = Math.floor(Date.now() / 1000);
 
-    // Seed a pre-existing non-library table (hive_mind) with data
+    // Seed a pre-existing non-library row (simulates data from before the
+    // library tables existed) plus a library row and its satellite (simulates
+    // a DB that already contains library data when the next boot happens).
     db.prepare(`
       INSERT INTO hive_mind (agent_id, chat_id, action, summary, created_at)
-      VALUES ('main', 'chat1', 'seeded', 'existed before library', ?)
+      VALUES ('main', 'chat1', 'seeded', 'existed before reboot', ?)
     `).run(now);
 
-    // Sanity: library tables already exist after _initTestDatabase (since
-    // createSchema runs there). So instead of dropping them, we verify the
-    // idempotency: inserting the same schema again must be a no-op and
-    // must not clear the hive_mind row.
-    //
-    // Pull the library schema block directly from sqlite_master and re-exec it.
-    const tables = ['library_items','item_media','item_content','item_tags','item_relationships','item_embeddings','item_content_fts'];
-    for (const t of tables) {
-      const row = db.prepare(`SELECT sql FROM sqlite_master WHERE name = ?`).get(t) as { sql: string } | undefined;
-      expect(row).toBeDefined();
-      // Rerun — should be harmless because every statement uses IF NOT EXISTS.
-      db.exec(row!.sql.replace(/^CREATE TABLE /, 'CREATE TABLE IF NOT EXISTS ').replace(/^CREATE VIRTUAL TABLE /, 'CREATE VIRTUAL TABLE IF NOT EXISTS '));
-    }
+    const seededItem = insertTestItem(db, { sourceType: 'note', project: 'general' });
+    db.prepare(`
+      INSERT INTO item_content (item_id, content_type, text, created_at)
+      VALUES (?, 'user_note', 'survives reboot', ?)
+    `).run(seededItem, now);
 
-    // Pre-existing data unchanged
-    const hive = db.prepare(`SELECT * FROM hive_mind`).all() as Array<{ summary: string }>;
+    // Simulate a fresh boot: re-run the actual createSchema function on the
+    // same DB. This is the real scenario we care about — if a future edit to
+    // createSchema accidentally DROPs or TRUNCATEs, this test catches it.
+    _reapplyTestSchema();
+
+    // Pre-existing non-library row unchanged
+    const hive = db.prepare(`SELECT summary FROM hive_mind`).all() as Array<{ summary: string }>;
     expect(hive.length).toBe(1);
-    expect(hive[0].summary).toBe('existed before library');
+    expect(hive[0].summary).toBe('existed before reboot');
 
-    // Library still empty + functional
-    expect((db.prepare(`SELECT COUNT(*) AS n FROM library_items`).get() as { n: number }).n).toBe(0);
+    // Pre-existing library rows unchanged
+    const items = db.prepare(`SELECT COUNT(*) AS n FROM library_items`).get() as { n: number };
+    expect(items.n).toBe(1);
+    const content = db.prepare(`SELECT text FROM item_content WHERE item_id = ?`).get(seededItem) as { text: string };
+    expect(content.text).toBe('survives reboot');
+
+    // FTS still wired up on the preserved content
+    const hits = db.prepare(
+      `SELECT item_id FROM item_content_fts WHERE item_content_fts MATCH 'reboot'`,
+    ).all() as Array<{ item_id: number }>;
+    expect(hits.some((h) => h.item_id === seededItem)).toBe(true);
   });
 });
 

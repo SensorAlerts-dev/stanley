@@ -780,6 +780,12 @@ export function _getTestDb(): Database.Database {
   return db;
 }
 
+/** @internal - for tests only. Re-runs createSchema on the active test DB
+ * so tests can verify boot-time idempotency without destroying existing rows. */
+export function _reapplyTestSchema(): void {
+  createSchema(db);
+}
+
 export function getSession(chatId: string, agentId = 'main'): string | undefined {
   const row = db
     .prepare('SELECT session_id FROM sessions WHERE chat_id = ? AND agent_id = ?')
