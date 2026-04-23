@@ -347,3 +347,74 @@ describe('library round-trip', () => {
     expect(hits.some((h) => h.item_id === itemId)).toBe(true);
   });
 });
+
+describe('library cascade deletes', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('deleting a library_item removes all satellite rows', () => {
+    const db = _getTestDb();
+    const now = Math.floor(Date.now() / 1000);
+
+    // Create two items so we can test that only the target's satellites are deleted
+    const itemA = (db.prepare(`
+      INSERT INTO library_items (source_type, captured_at, project, created_at)
+      VALUES ('tiktok', ?, 'pure_bliss', ?)
+    `).run(now, now).lastInsertRowid as number);
+    const itemB = (db.prepare(`
+      INSERT INTO library_items (source_type, captured_at, project, created_at)
+      VALUES ('reddit', ?, 'pure_bliss', ?)
+    `).run(now, now).lastInsertRowid as number);
+
+    // Satellite rows for item A
+    db.prepare(`INSERT INTO item_media (item_id, media_type, storage, created_at) VALUES (?, 'image', 'local', ?)`).run(itemA, now);
+    db.prepare(`INSERT INTO item_content (item_id, content_type, text, created_at) VALUES (?, 'ocr', 'hello', ?)`).run(itemA, now);
+    db.prepare(`INSERT INTO item_tags (item_id, tag, tag_type, created_at) VALUES (?, 'kefir', 'topic', ?)`).run(itemA, now);
+    db.prepare(`INSERT INTO item_relationships (source_item_id, target_item_id, relation_type, created_at) VALUES (?, ?, 'same_topic', ?)`).run(itemA, itemB, now);
+    db.prepare(`INSERT INTO item_embeddings (item_id, model, dimensions, embedding, created_at) VALUES (?, 'test', 1, ?, ?)`).run(itemA, Buffer.alloc(4), now);
+
+    // Satellite for item B (to survive)
+    db.prepare(`INSERT INTO item_media (item_id, media_type, storage, created_at) VALUES (?, 'image', 'local', ?)`).run(itemB, now);
+
+    // Delete item A
+    db.prepare(`DELETE FROM library_items WHERE id = ?`).run(itemA);
+
+    // All A satellites gone
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM item_media WHERE item_id = ?`).get(itemA) as { n: number }).toEqual({ n: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM item_content WHERE item_id = ?`).get(itemA) as { n: number }).toEqual({ n: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM item_tags WHERE item_id = ?`).get(itemA) as { n: number }).toEqual({ n: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM item_relationships WHERE source_item_id = ? OR target_item_id = ?`).get(itemA, itemA) as { n: number }).toEqual({ n: 0 });
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM item_embeddings WHERE item_id = ?`).get(itemA) as { n: number }).toEqual({ n: 0 });
+
+    // B satellite survives
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM item_media WHERE item_id = ?`).get(itemB) as { n: number }).toEqual({ n: 1 });
+  });
+
+  it('deleting a library_item removes its FTS rows', () => {
+    const db = _getTestDb();
+    const now = Math.floor(Date.now() / 1000);
+
+    const itemId = (db.prepare(`
+      INSERT INTO library_items (source_type, captured_at, project, created_at)
+      VALUES ('note', ?, 'general', ?)
+    `).run(now, now).lastInsertRowid as number);
+    db.prepare(`
+      INSERT INTO item_content (item_id, content_type, text, created_at)
+      VALUES (?, 'user_note', 'unique-searchterm-zebrafish', ?)
+    `).run(itemId, now);
+
+    // Sanity check: searchable before delete
+    expect(
+      (db.prepare(`SELECT item_id FROM item_content_fts WHERE item_content_fts MATCH 'zebrafish'`).all() as unknown[]).length,
+    ).toBe(1);
+
+    db.prepare(`DELETE FROM library_items WHERE id = ?`).run(itemId);
+
+    // After cascade, content row is gone, and the trigger on item_content
+    // (AFTER DELETE) should have removed the FTS entry.
+    expect(
+      (db.prepare(`SELECT item_id FROM item_content_fts WHERE item_content_fts MATCH 'zebrafish'`).all() as unknown[]).length,
+    ).toBe(0);
+  });
+});
