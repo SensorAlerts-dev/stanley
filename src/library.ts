@@ -3,8 +3,13 @@ import { _getTestDb } from './db.js';
 
 // Re-export so tests and sibling modules can reach the DB handle through
 // library.ts without depending on db.js directly. Naming is a misnomer
-// inherited from Phase 1 — it returns the active (prod or test) handle.
+// inherited from Phase 1 -- it returns the active (prod or test) handle.
 export { _getTestDb };
+
+// Internal alias: functions in this module call `getDb()` for readability
+// since _getTestDb's name implies test-only, which is misleading. Rename
+// to getDb across the codebase is a deferred follow-up.
+const getDb = _getTestDb;
 
 // ── URL canonicalization ──────────────────────────────────────────────
 // Produces a stable string for dedup. Lower-case scheme+host, strip trailing
@@ -142,7 +147,7 @@ export interface InsertItemResult {
 }
 
 export function insertItem(opts: InsertItemOpts): InsertItemResult {
-  const db = _getTestDb();
+  const db = getDb();
   const now = Math.floor(Date.now() / 1000);
   const canonical = opts.url ? canonicalizeUrl(opts.url) : null;
   const hash = canonical ? urlHash(canonical) : null;
@@ -214,7 +219,7 @@ export interface AddMediaOpts {
 }
 
 export function addMedia(itemId: number, opts: AddMediaOpts): number {
-  const db = _getTestDb();
+  const db = getDb();
   const now = Math.floor(Date.now() / 1000);
   const info = db.prepare(`
     INSERT INTO item_media (
@@ -244,7 +249,7 @@ export interface AddContentOpts {
 }
 
 export function addContent(itemId: number, opts: AddContentOpts): number {
-  const db = _getTestDb();
+  const db = getDb();
   const now = Math.floor(Date.now() / 1000);
   const info = db.prepare(`
     INSERT INTO item_content (item_id, content_type, text, source_agent, token_count, created_at)
@@ -261,7 +266,7 @@ export interface AddTagOpts {
 }
 
 export function addTag(itemId: number, opts: AddTagOpts): void {
-  const db = _getTestDb();
+  const db = getDb();
   const now = Math.floor(Date.now() / 1000);
   // INSERT OR IGNORE -- composite PK (item_id, tag, tag_type) makes
   // duplicate addTag calls no-ops rather than errors.
