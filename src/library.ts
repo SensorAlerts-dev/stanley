@@ -390,9 +390,9 @@ export function searchLibrary(opts: SearchOpts): ItemSearchRow[] {
       JOIN library_items li ON li.id = item_content_fts.item_id
       WHERE ${filters.join(' AND ')}
       ORDER BY li.captured_at DESC
-      LIMIT ${limit}
+      LIMIT ?
     `;
-    return db.prepare(sql).all(...params) as ItemSearchRow[];
+    return db.prepare(sql).all(...params, limit) as ItemSearchRow[];
   }
 
   const filters: string[] = ['1=1'];
@@ -409,8 +409,8 @@ export function searchLibrary(opts: SearchOpts): ItemSearchRow[] {
     FROM library_items
     WHERE ${filters.join(' AND ')}
     ORDER BY captured_at DESC
-    LIMIT ${limit}
-  `).all(...params) as ItemSearchRow[];
+    LIMIT ?
+  `).all(...params, limit) as ItemSearchRow[];
 }
 
 // ── Mission task queuing ───────────────────────────────────────────────
