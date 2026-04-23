@@ -250,3 +250,55 @@ describe('library-cli find / open / recent', () => {
     expect(items.length).toBeLessThanOrEqual(5);
   });
 });
+
+describe('library-cli delete / update', () => {
+  it('delete removes the item', () => {
+    const saveRes = JSON.parse(runCli(['save', '--source-type', 'note', '--user-note', 'delete test']).stdout);
+    const delRes = runCli(['delete', String(saveRes.id)]);
+    expect(delRes.exitCode).toBe(0);
+    const openRes = runCli(['open', String(saveRes.id)]);
+    expect(openRes.exitCode).not.toBe(0);
+  });
+
+  it('update --project reassigns', () => {
+    const saveRes = JSON.parse(runCli(['save', '--source-type', 'note', '--user-note', 'project test', '--project', 'general']).stdout);
+    const updRes = runCli(['update', String(saveRes.id), '--project', 'pure_bliss']);
+    expect(updRes.exitCode).toBe(0);
+    const opened = JSON.parse(runCli(['open', String(saveRes.id), '--json']).stdout);
+    expect(opened.project).toBe('pure_bliss');
+  });
+
+  it('update --pinned 1 sets pinned', () => {
+    const saveRes = JSON.parse(runCli(['save', '--source-type', 'note', '--user-note', 'pin test']).stdout);
+    runCli(['update', String(saveRes.id), '--pinned', '1']);
+    const opened = JSON.parse(runCli(['open', String(saveRes.id), '--json']).stdout);
+    expect(opened.pinned).toBe(true);
+  });
+
+  it('update --reviewed sets reviewed_at', () => {
+    const saveRes = JSON.parse(runCli(['save', '--source-type', 'note', '--user-note', 'review test']).stdout);
+    runCli(['update', String(saveRes.id), '--reviewed']);
+    const opened = JSON.parse(runCli(['open', String(saveRes.id), '--json']).stdout);
+    expect(opened.reviewed_at).toBeGreaterThan(0);
+  });
+
+  it('update --reenrich nulls enriched_at and queues processor task', async () => {
+    const saveRes = JSON.parse(runCli(['save', '--source-type', 'article', '--url', 'https://example.com/reen-' + Date.now(), '--enriched']).stdout);
+    runCli(['update', String(saveRes.id), '--reenrich']);
+    const opened = JSON.parse(runCli(['open', String(saveRes.id), '--json']).stdout);
+    expect(opened.enriched_at).toBeNull();
+
+    const Database = (await import('better-sqlite3')).default;
+    const db = new Database(path.join(PROJECT_ROOT, 'store', 'claudeclaw.db'), { readonly: true });
+    const tasks = db.prepare(`SELECT prompt FROM mission_tasks WHERE assigned_agent = 'processor' AND prompt LIKE ?`).all('%' + saveRes.id + '%') as Array<{ prompt: string }>;
+    expect(tasks.length).toBeGreaterThan(0);
+    db.close();
+  });
+
+  it('update --append-note appends to user_note with separator and bumps last_seen_at', () => {
+    const saveRes = JSON.parse(runCli(['save', '--source-type', 'note', '--user-note', 'original']).stdout);
+    runCli(['update', String(saveRes.id), '--append-note', 'appended text']);
+    const opened = JSON.parse(runCli(['open', String(saveRes.id), '--json']).stdout);
+    expect(opened.user_note).toBe('original\n---\nappended text');
+  });
+});

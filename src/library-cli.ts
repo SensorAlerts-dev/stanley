@@ -293,6 +293,57 @@ async function run(): Promise<void> {
       break;
     }
 
+    case 'delete': {
+      const id = parseInt(rest[0], 10);
+      if (isNaN(id)) {
+        console.error('Error: delete requires a numeric id');
+        process.exit(1);
+      }
+      const { deleteItem, getItem } = await import('./library.js');
+      const exists = getItem(id);
+      if (!exists) {
+        console.error(`Item ${id} not found`);
+        process.exit(1);
+      }
+      deleteItem(id);
+      console.log(JSON.stringify({ deleted: id }));
+      break;
+    }
+
+    case 'update': {
+      const id = parseInt(rest[0], 10);
+      if (isNaN(id)) {
+        console.error('Error: update requires a numeric id');
+        process.exit(1);
+      }
+      const flags = parseFlags(rest.slice(1));
+      const lib = await import('./library.js');
+      const db = lib._getTestDb();
+
+      if (typeof flags.project === 'string') lib.setProject(id, flags.project as Project);
+      if (typeof flags.pinned === 'string') lib.setPinned(id, flags.pinned === '1');
+      if (flags.reviewed) lib.markReviewed(id);
+      if (flags.reenrich) {
+        db.prepare(`UPDATE library_items SET enriched_at = NULL WHERE id = ?`).run(id);
+        lib.queueProcessorTask(id, 'reenrich requested');
+      }
+      if (typeof flags['append-note'] === 'string') {
+        const now = Math.floor(Date.now() / 1000);
+        const existing = db.prepare(`SELECT user_note FROM library_items WHERE id = ?`).get(id) as { user_note: string | null } | undefined;
+        if (!existing) {
+          console.error(`Item ${id} not found`);
+          process.exit(1);
+        }
+        const merged = existing.user_note
+          ? `${existing.user_note}\n---\n${flags['append-note']}`
+          : (flags['append-note'] as string);
+        db.prepare(`UPDATE library_items SET user_note = ?, last_seen_at = ? WHERE id = ?`).run(merged, now, id);
+      }
+
+      console.log(JSON.stringify({ updated: id }));
+      break;
+    }
+
     default:
       console.error(`Unknown subcommand: ${subcommand}`);
       usage();
