@@ -306,3 +306,128 @@ export function deleteItem(itemId: number): void {
   const db = getDb();
   db.prepare(`DELETE FROM library_items WHERE id = ?`).run(itemId);
 }
+
+// ── Full item read ─────────────────────────────────────────────────────
+export interface FullItem {
+  id: number;
+  source_type: SourceType;
+  url: string | null;
+  title: string | null;
+  author: string | null;
+  captured_at: number;
+  last_seen_at: number | null;
+  project: Project;
+  user_note: string | null;
+  source_meta: Record<string, unknown> | null;
+  reviewed_at: number | null;
+  pinned: boolean;
+  enriched_at: number | null;
+  related_at: number | null;
+  analyzed_at: number | null;
+  media: Array<Record<string, unknown>>;
+  content: Array<Record<string, unknown>>;
+  tags: Array<Record<string, unknown>>;
+}
+
+export function getItem(itemId: number): FullItem | null {
+  const db = getDb();
+  const row = db.prepare(`SELECT * FROM library_items WHERE id = ?`).get(itemId) as Record<string, unknown> | undefined;
+  if (!row) return null;
+
+  const media = db.prepare(`SELECT * FROM item_media WHERE item_id = ? ORDER BY id`).all(itemId) as Array<Record<string, unknown>>;
+  const content = db.prepare(`SELECT * FROM item_content WHERE item_id = ? ORDER BY id`).all(itemId) as Array<Record<string, unknown>>;
+  const tags = db.prepare(`SELECT * FROM item_tags WHERE item_id = ? ORDER BY tag_type, tag`).all(itemId) as Array<Record<string, unknown>>;
+
+  return {
+    ...(row as unknown as FullItem),
+    pinned: !!row.pinned,
+    source_meta: row.source_meta ? JSON.parse(row.source_meta as string) : null,
+    media,
+    content,
+    tags,
+  };
+}
+
+// ── Search ─────────────────────────────────────────────────────────────
+export interface SearchOpts {
+  query?: string;
+  project?: Project;
+  source_type?: SourceType;
+  pinned?: boolean;
+  reviewed?: boolean;
+  limit?: number;
+  since?: number;
+}
+
+export interface ItemSearchRow {
+  id: number;
+  source_type: string;
+  url: string | null;
+  title: string | null;
+  project: string;
+  captured_at: number;
+  snippet?: string;
+}
+
+export function searchLibrary(opts: SearchOpts): ItemSearchRow[] {
+  const db = getDb();
+  const limit = opts.limit ?? 10;
+
+  if (opts.query && opts.query.trim().length > 0) {
+    const filters: string[] = [`item_content_fts MATCH ?`];
+    const params: unknown[] = [opts.query];
+    if (opts.project) { filters.push(`li.project = ?`); params.push(opts.project); }
+    if (opts.source_type) { filters.push(`li.source_type = ?`); params.push(opts.source_type); }
+    if (opts.pinned !== undefined) { filters.push(`li.pinned = ?`); params.push(opts.pinned ? 1 : 0); }
+    if (opts.reviewed === true) filters.push(`li.reviewed_at IS NOT NULL`);
+    if (opts.reviewed === false) filters.push(`li.reviewed_at IS NULL`);
+    if (opts.since) { filters.push(`li.captured_at >= ?`); params.push(opts.since); }
+
+    const sql = `
+      SELECT DISTINCT li.id, li.source_type, li.url, li.title, li.project, li.captured_at,
+        snippet(item_content_fts, 0, '<', '>', '...', 20) AS snippet
+      FROM item_content_fts
+      JOIN library_items li ON li.id = item_content_fts.item_id
+      WHERE ${filters.join(' AND ')}
+      ORDER BY li.captured_at DESC
+      LIMIT ${limit}
+    `;
+    return db.prepare(sql).all(...params) as ItemSearchRow[];
+  }
+
+  const filters: string[] = ['1=1'];
+  const params: unknown[] = [];
+  if (opts.project) { filters.push(`project = ?`); params.push(opts.project); }
+  if (opts.source_type) { filters.push(`source_type = ?`); params.push(opts.source_type); }
+  if (opts.pinned !== undefined) { filters.push(`pinned = ?`); params.push(opts.pinned ? 1 : 0); }
+  if (opts.reviewed === true) filters.push(`reviewed_at IS NOT NULL`);
+  if (opts.reviewed === false) filters.push(`reviewed_at IS NULL`);
+  if (opts.since) { filters.push(`captured_at >= ?`); params.push(opts.since); }
+
+  return db.prepare(`
+    SELECT id, source_type, url, title, project, captured_at
+    FROM library_items
+    WHERE ${filters.join(' AND ')}
+    ORDER BY captured_at DESC
+    LIMIT ${limit}
+  `).all(...params) as ItemSearchRow[];
+}
+
+// ── Mission task queuing ───────────────────────────────────────────────
+export function queueProcessorTask(itemId: number, reason: string): string {
+  const db = getDb();
+  const id = crypto.randomBytes(4).toString('hex');
+  const now = Math.floor(Date.now() / 1000);
+  db.prepare(`
+    INSERT INTO mission_tasks (
+      id, title, prompt, assigned_agent, status, created_by, priority, created_at
+    ) VALUES (?, ?, ?, ?, 'queued', 'memobot', 0, ?)
+  `).run(
+    id,
+    `process item ${itemId}`,
+    `Process library item ${itemId}: ${reason}`,
+    'processor',
+    now,
+  );
+  return id;
+}

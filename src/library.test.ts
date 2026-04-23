@@ -859,6 +859,80 @@ describe('library.ts satellite helpers', () => {
   });
 });
 
+describe('library.ts reads and processor task', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('getItem returns the item plus its satellites', async () => {
+    const { insertItem, addMedia, addContent, addTag, getItem } = await import('./library.js');
+    const item = insertItem({ source_type: 'tiktok', url: 'https://tiktok.com/@x/1', title: 'T', author: '@x' });
+    addMedia(item.id, { media_type: 'image', file_path: 'p.png', storage: 'local' });
+    addContent(item.id, { content_type: 'scraped_summary', text: 'summary', source_agent: 'memobot' });
+    addTag(item.id, { tag: '@x', tag_type: 'person', source_agent: 'memobot' });
+
+    const full = getItem(item.id);
+    expect(full).toBeDefined();
+    expect(full!.id).toBe(item.id);
+    expect(full!.title).toBe('T');
+    expect(full!.media.length).toBe(1);
+    expect(full!.content.length).toBe(1);
+    expect(full!.tags.length).toBe(1);
+  });
+
+  it('getItem returns null for missing id', async () => {
+    const { getItem } = await import('./library.js');
+    expect(getItem(99999)).toBeNull();
+  });
+
+  it('searchLibrary returns FTS5 matches', async () => {
+    const { insertItem, addContent, searchLibrary } = await import('./library.js');
+    const a = insertItem({ source_type: 'note', title: 'A' });
+    const b = insertItem({ source_type: 'note', title: 'B' });
+    addContent(a.id, { content_type: 'user_note', text: 'platypus lives here', source_agent: 'memobot' });
+    addContent(b.id, { content_type: 'user_note', text: 'nothing about marsupials', source_agent: 'memobot' });
+
+    const hits = searchLibrary({ query: 'platypus' });
+    expect(hits.length).toBe(1);
+    expect(hits[0].id).toBe(a.id);
+  });
+
+  it('searchLibrary filters by project', async () => {
+    const { insertItem, addContent, searchLibrary } = await import('./library.js');
+    const a = insertItem({ source_type: 'note', project: 'pure_bliss' });
+    const b = insertItem({ source_type: 'note', project: 'general' });
+    addContent(a.id, { content_type: 'user_note', text: 'kombucha experiment', source_agent: 'memobot' });
+    addContent(b.id, { content_type: 'user_note', text: 'kombucha recipe', source_agent: 'memobot' });
+
+    const hits = searchLibrary({ query: 'kombucha', project: 'pure_bliss' });
+    expect(hits.length).toBe(1);
+    expect(hits[0].id).toBe(a.id);
+  });
+
+  it('searchLibrary with no query returns recent items', async () => {
+    const { insertItem, searchLibrary } = await import('./library.js');
+    insertItem({ source_type: 'note', user_note: '1' });
+    insertItem({ source_type: 'note', user_note: '2' });
+    insertItem({ source_type: 'note', user_note: '3' });
+
+    const hits = searchLibrary({ limit: 10 });
+    expect(hits.length).toBe(3);
+  });
+
+  it('queueProcessorTask inserts into mission_tasks', async () => {
+    const { insertItem, queueProcessorTask, _getTestDb: getDb } = await import('./library.js');
+    const db = getDb();
+    const item = insertItem({ source_type: 'screenshot' });
+    const taskId = queueProcessorTask(item.id, 'screenshot needs OCR');
+    expect(taskId).toBeTruthy();
+    const row = db.prepare(`SELECT title, prompt, assigned_agent, created_by FROM mission_tasks WHERE id = ?`).get(taskId) as Record<string, string>;
+    expect(row.assigned_agent).toBe('processor');
+    expect(row.prompt).toContain(String(item.id));
+    expect(row.prompt).toContain('screenshot needs OCR');
+    expect(row.created_by).toBe('memobot');
+  });
+});
+
 describe('library.ts lifecycle setters', () => {
   beforeEach(() => {
     _initTestDatabase();
