@@ -4,6 +4,7 @@ import os from 'os';
 import { Api, Bot, Context, InputFile, RawApi } from 'grammy';
 
 import { runAgent, runAgentWithRetry, UsageInfo, AgentProgressEvent } from './agent.js';
+import { handleMemobotMessage } from './memobot-handler.js';
 import { AgentError } from './errors.js';
 import {
   AGENT_ID,
@@ -463,6 +464,35 @@ async function handleMessage(ctx: Context, message: string, forceVoiceReply = fa
       setProcessing(chatIdStr, false);
     }
     return;
+  }
+
+  // ── Memobot deterministic capture path ────────────────────────────
+  // Memobot's primary job (save URLs, notes, slash-commands) is handled
+  // without an LLM. Regex + library-cli subprocess. Zero per-save cost,
+  // no scraping temptation, no hallucinated replies. Falls through to
+  // the agent only for genuinely ambiguous inputs (images, voice,
+  // forwarded messages, unknown slash commands).
+  if (AGENT_ID === 'memobot') {
+    setProcessing(chatIdStr, true);
+    try {
+      const handled = await handleMemobotMessage(message);
+      if (handled) {
+        if (!skipLog) {
+          saveConversationTurn(chatIdStr, message, handled.reply, undefined, AGENT_ID);
+        }
+        emitChatEvent({ type: 'assistant_message', chatId: chatIdStr, content: handled.reply, source: 'telegram' });
+        for (const part of splitMessage(handled.reply)) {
+          await ctx.reply(part);
+        }
+        return;
+      }
+      // null from handler -> fall through to agent
+    } catch (err) {
+      logger.error({ err }, 'memobot deterministic handler threw');
+      // fall through to agent on error (graceful degradation)
+    } finally {
+      setProcessing(chatIdStr, false);
+    }
   }
 
   // Fetch session first: if resuming, the model already has the system prompt in context.

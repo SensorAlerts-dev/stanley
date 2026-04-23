@@ -218,15 +218,19 @@ export async function runAgent(
     // SDK Options.mcpServers expects Record<string, McpServerConfig>
     const mcpServerSpecs = mcpServerNames.length > 0 ? mcpServers : undefined;
 
-    // Memobot is a capture-only collector. WebFetch/WebSearch tempt the
-    // model into scraping URLs itself and producing rich replies instead
-    // of calling library-cli save. Disable those tools for memobot only;
-    // every other agent keeps the full default toolset. Task (Agent
-    // dispatch) is also blocked because memobot has no use for sub-agent
-    // delegation and it's another way to burn the turn.
+    // Memobot is a capture-only collector. Every scraping/web-fetch tool
+    // tempts the model into doing research instead of calling library-cli
+    // save. Disable:
+    //   - Native SDK web tools: WebFetch, WebSearch
+    //   - Sub-agent dispatch: Task
+    //   - Every MCP tool (Playwright, Firecrawl, etc.): mcp__*
+    // The mcp__* pattern covers MCPs loaded via Claude Code's enabledPlugins
+    // system in ~/.claude/settings.json, which aren't blocked by our own
+    // agent.yaml mcp_servers allowlist. Leaves only built-in Bash/Read/
+    // Write/Edit/Glob/Grep/TodoWrite etc. for memobot.
     const disallowedTools: string[] | undefined =
       AGENT_ID === 'memobot'
-        ? ['WebFetch', 'WebSearch', 'Task']
+        ? ['WebFetch', 'WebSearch', 'Task', 'mcp__*']
         : undefined;
 
     for await (const event of query({
@@ -240,7 +244,10 @@ export async function runAgent(
         resume: sessionId,
 
         // 'project' loads CLAUDE.md from cwd; 'user' loads ~/.claude/skills/ and user settings
-        settingSources: ['project', 'user'],
+        // Memobot skips 'user' so the enabledPlugins in ~/.claude/settings.json
+        // (Playwright, Firecrawl, etc.) do not load. It only needs its own
+        // CLAUDE.md from its agent directory.
+        settingSources: AGENT_ID === 'memobot' ? ['project'] : ['project', 'user'],
 
         // Skip all permission prompts — this is a trusted personal bot on your own machine
         permissionMode: 'bypassPermissions',
