@@ -1,6 +1,11 @@
 import crypto from 'crypto';
 import { _getTestDb } from './db.js';
 
+// Re-export so tests and sibling modules can reach the DB handle through
+// library.ts without depending on db.js directly. Naming is a misnomer
+// inherited from Phase 1 — it returns the active (prod or test) handle.
+export { _getTestDb };
+
 // ── URL canonicalization ──────────────────────────────────────────────
 // Produces a stable string for dedup. Lower-case scheme+host, strip trailing
 // slash, remove known noise query parameters, trim whitespace.
