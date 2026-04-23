@@ -779,3 +779,82 @@ describe('library CHECK constraints', () => {
     }).toThrow(/CHECK constraint failed: content_type IN/);
   });
 });
+
+describe('library.ts satellite helpers', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('addMedia inserts an item_media row and returns its id', async () => {
+    const { insertItem, addMedia, _getTestDb: getDb } = await import('./library.js');
+    const item = insertItem({ source_type: 'screenshot' });
+    const mediaId = addMedia(item.id, {
+      media_type: 'image',
+      file_path: 'general/screenshots/20260423-1512_1_test.png',
+      storage: 'local',
+      mime_type: 'image/png',
+      bytes: 4096,
+    });
+    expect(mediaId).toBeGreaterThan(0);
+    const db = getDb();
+    const row = db.prepare(`SELECT * FROM item_media WHERE id = ?`).get(mediaId) as Record<string, unknown>;
+    expect(row.item_id).toBe(item.id);
+    expect(row.media_type).toBe('image');
+    expect(row.storage).toBe('local');
+    expect(row.bytes).toBe(4096);
+  });
+
+  it('addContent inserts an item_content row and returns its id', async () => {
+    const { insertItem, addContent, _getTestDb: getDb } = await import('./library.js');
+    const item = insertItem({ source_type: 'article', url: 'https://example.com/a' });
+    const contentId = addContent(item.id, {
+      content_type: 'scraped_summary',
+      text: 'brief summary here',
+      source_agent: 'memobot',
+    });
+    expect(contentId).toBeGreaterThan(0);
+    const db = getDb();
+    const row = db.prepare(`SELECT * FROM item_content WHERE id = ?`).get(contentId) as Record<string, unknown>;
+    expect(row.item_id).toBe(item.id);
+    expect(row.content_type).toBe('scraped_summary');
+    expect(row.text).toBe('brief summary here');
+  });
+
+  it('addContent triggers FTS5 index (content is searchable after insert)', async () => {
+    const { insertItem, addContent, _getTestDb: getDb } = await import('./library.js');
+    const item = insertItem({ source_type: 'note' });
+    addContent(item.id, {
+      content_type: 'user_note',
+      text: 'unique-fts-probe-platypus',
+      source_agent: 'memobot',
+    });
+    const db = getDb();
+    const hits = db.prepare(`SELECT item_id FROM item_content_fts WHERE item_content_fts MATCH 'platypus'`).all() as Array<{ item_id: number }>;
+    expect(hits.length).toBe(1);
+    expect(hits[0].item_id).toBe(item.id);
+  });
+
+  it('addTag inserts an item_tags row (idempotent on composite PK)', async () => {
+    const { insertItem, addTag, _getTestDb: getDb } = await import('./library.js');
+    const item = insertItem({ source_type: 'tiktok', url: 'https://tiktok.com/@x/1' });
+    addTag(item.id, { tag: '@brewlife', tag_type: 'person', source_agent: 'memobot', confidence: 1.0 });
+    addTag(item.id, { tag: 'kefir', tag_type: 'topic', source_agent: 'memobot' });
+
+    const db = getDb();
+    const tags = db.prepare(`SELECT tag, tag_type FROM item_tags WHERE item_id = ? ORDER BY tag`).all(item.id);
+    expect(tags.length).toBe(2);
+    expect(tags).toEqual([
+      { tag: '@brewlife', tag_type: 'person' },
+      { tag: 'kefir', tag_type: 'topic' },
+    ]);
+  });
+
+  it('addTag is idempotent -- duplicate tag on same item does not throw', async () => {
+    const { insertItem, addTag } = await import('./library.js');
+    const item = insertItem({ source_type: 'tiktok', url: 'https://tiktok.com/@x/1' });
+    addTag(item.id, { tag: '@brewlife', tag_type: 'person', source_agent: 'memobot' });
+    expect(() => {
+      addTag(item.id, { tag: '@brewlife', tag_type: 'person', source_agent: 'memobot' });
+    }).not.toThrow();
+  });
+});

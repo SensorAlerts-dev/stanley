@@ -200,3 +200,73 @@ export function insertItem(opts: InsertItemOpts): InsertItemResult {
 
   return { id: info.lastInsertRowid as number, is_duplicate: false };
 }
+
+// ── Satellite helpers ──────────────────────────────────────────────────
+export interface AddMediaOpts {
+  media_type: 'image' | 'video' | 'pdf' | 'audio' | 'other';
+  file_path: string;
+  storage: 'local' | 'drive' | 'both';
+  mime_type?: string;
+  bytes?: number;
+  drive_file_id?: string;
+  drive_url?: string;
+  ocr_text?: string;
+}
+
+export function addMedia(itemId: number, opts: AddMediaOpts): number {
+  const db = _getTestDb();
+  const now = Math.floor(Date.now() / 1000);
+  const info = db.prepare(`
+    INSERT INTO item_media (
+      item_id, media_type, file_path, storage, mime_type, bytes,
+      drive_file_id, drive_url, ocr_text, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    itemId,
+    opts.media_type,
+    opts.file_path,
+    opts.storage,
+    opts.mime_type ?? null,
+    opts.bytes ?? null,
+    opts.drive_file_id ?? null,
+    opts.drive_url ?? null,
+    opts.ocr_text ?? null,
+    now,
+  );
+  return info.lastInsertRowid as number;
+}
+
+export interface AddContentOpts {
+  content_type: 'ocr' | 'scraped_summary' | 'transcript' | 'user_note';
+  text: string;
+  source_agent: string;
+  token_count?: number;
+}
+
+export function addContent(itemId: number, opts: AddContentOpts): number {
+  const db = _getTestDb();
+  const now = Math.floor(Date.now() / 1000);
+  const info = db.prepare(`
+    INSERT INTO item_content (item_id, content_type, text, source_agent, token_count, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(itemId, opts.content_type, opts.text, opts.source_agent, opts.token_count ?? null, now);
+  return info.lastInsertRowid as number;
+}
+
+export interface AddTagOpts {
+  tag: string;
+  tag_type: 'topic' | 'person' | 'brand' | 'hashtag' | 'mood' | 'other';
+  source_agent: string;
+  confidence?: number;
+}
+
+export function addTag(itemId: number, opts: AddTagOpts): void {
+  const db = _getTestDb();
+  const now = Math.floor(Date.now() / 1000);
+  // INSERT OR IGNORE -- composite PK (item_id, tag, tag_type) makes
+  // duplicate addTag calls no-ops rather than errors.
+  db.prepare(`
+    INSERT OR IGNORE INTO item_tags (item_id, tag, tag_type, confidence, source_agent, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(itemId, opts.tag, opts.tag_type, opts.confidence ?? null, opts.source_agent, now);
+}
