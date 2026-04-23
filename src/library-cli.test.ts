@@ -157,3 +157,41 @@ describe('library-cli save (no media)', () => {
     db.close();
   });
 });
+
+describe('library-cli save with --media-temp-path', () => {
+  it('moves temp file to $LIBRARY_ROOT and inserts item_media row', async () => {
+    // Create a temp fake PNG
+    const tmp = fs.mkdtempSync(path.join(require('os').tmpdir(), 'libtest-'));
+    const tempFile = path.join(tmp, 'test-image.png');
+    fs.writeFileSync(tempFile, Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]));
+
+    const { stdout, exitCode } = runCli([
+      'save',
+      '--source-type', 'screenshot',
+      '--project', 'general',
+      '--user-note', 'test shot',
+      '--media-temp-path', tempFile,
+      '--media-type', 'image',
+      '--media-mime', 'image/png',
+    ]);
+    expect(exitCode).toBe(0);
+    const out = JSON.parse(stdout);
+    expect(out.id).toBeGreaterThan(0);
+
+    expect(fs.existsSync(tempFile)).toBe(false);  // moved
+
+    const Database = (await import('better-sqlite3')).default;
+    const db = new Database(path.join(PROJECT_ROOT, 'store', 'claudeclaw.db'), { readonly: true });
+    const media = db.prepare(`SELECT file_path, media_type, storage FROM item_media WHERE item_id = ?`).get(out.id) as { file_path: string; media_type: string; storage: string };
+    expect(media.media_type).toBe('image');
+    expect(media.storage).toBe('local');
+    expect(media.file_path).toMatch(/^general\/screenshots\/\d{8}-\d{4}_\d+_.+\.png$/);
+
+    const { LIBRARY_ROOT } = await import('./config.js');
+    expect(fs.existsSync(path.join(LIBRARY_ROOT, media.file_path))).toBe(true);
+
+    fs.unlinkSync(path.join(LIBRARY_ROOT, media.file_path));
+    fs.rmdirSync(tmp);
+    db.close();
+  });
+});

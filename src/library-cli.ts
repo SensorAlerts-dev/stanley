@@ -156,6 +156,72 @@ async function run(): Promise<void> {
         queueProcessorTask(result.id, flags['queue-processor'] as string);
       }
 
+      // Handle --media-temp-path: insert library_items first (done above),
+      // then move the temp file and insert item_media
+      if (typeof flags['media-temp-path'] === 'string') {
+        const { LIBRARY_ROOT } = await import('./config.js');
+        const { addMedia } = await import('./library.js');
+        const fs = await import('fs');
+        const path = await import('path');
+
+        const tempPath = flags['media-temp-path'] as string;
+        const mediaType = (flags['media-type'] as string) || 'other';
+        const mediaMime = (flags['media-mime'] as string) || undefined;
+
+        // Route to subfolder by media type
+        const bucket = (
+          mediaType === 'image' ? 'screenshots' :
+          mediaType === 'pdf' ? 'pdfs' :
+          mediaType === 'video' ? 'videos' :
+          mediaType === 'audio' ? 'audio' :
+          'other'
+        );
+
+        // Filename: YYYYMMDD-HHMM_<id>_<slug>.<ext>
+        const ts = new Date();
+        const datePart = `${ts.getFullYear()}${String(ts.getMonth() + 1).padStart(2, '0')}${String(ts.getDate()).padStart(2, '0')}`;
+        const timePart = `${String(ts.getHours()).padStart(2, '0')}${String(ts.getMinutes()).padStart(2, '0')}`;
+        const slug = ((typeof flags['user-note'] === 'string' ? flags['user-note'] : '') || 'untitled')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '')
+          .slice(0, 40) || 'untitled';
+        const ext = path.extname(tempPath) || (
+          mediaMime === 'image/png' ? '.png' :
+          mediaMime === 'image/jpeg' ? '.jpg' :
+          mediaMime === 'application/pdf' ? '.pdf' :
+          ''
+        );
+        const finalFilename = `${datePart}-${timePart}_${result.id}_${slug}${ext}`;
+
+        const project = typeof flags.project === 'string' ? flags.project : 'general';
+        const relativePath = `${project}/${bucket}/${finalFilename}`;
+        const absolutePath = path.join(LIBRARY_ROOT, relativePath);
+
+        fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+        try {
+          fs.renameSync(tempPath, absolutePath);
+        } catch (err: unknown) {
+          if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'EXDEV') {
+            // Cross-device move: copy then delete
+            fs.copyFileSync(tempPath, absolutePath);
+            fs.unlinkSync(tempPath);
+          } else {
+            throw err;
+          }
+        }
+
+        const stats = fs.statSync(absolutePath);
+
+        addMedia(result.id, {
+          media_type: mediaType as 'image' | 'video' | 'pdf' | 'audio' | 'other',
+          file_path: relativePath,
+          storage: 'local',
+          mime_type: mediaMime,
+          bytes: stats.size,
+        });
+      }
+
       console.log(JSON.stringify(result));
       break;
     }
