@@ -1123,3 +1123,41 @@ describe('library.ts fetchOgMeta', () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }, 15000);
 });
+
+describe('schema migration: ai_summary content_type', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('accepts ai_summary as a content_type', () => {
+    const db = _getTestDb();
+    const now = Math.floor(Date.now() / 1000);
+    const itemId = (db.prepare(`
+      INSERT INTO library_items (source_type, captured_at, project, created_at)
+      VALUES ('note', ?, 'general', ?)
+    `).run(now, now).lastInsertRowid as number);
+
+    expect(() => {
+      db.prepare(`
+        INSERT INTO item_content (item_id, content_type, text, created_at)
+        VALUES (?, 'ai_summary', 'one line summary', ?)
+      `).run(itemId, now);
+    }).not.toThrow();
+  });
+
+  it('still rejects unknown content_type values', () => {
+    const db = _getTestDb();
+    const now = Math.floor(Date.now() / 1000);
+    const itemId = (db.prepare(`
+      INSERT INTO library_items (source_type, captured_at, project, created_at)
+      VALUES ('note', ?, 'general', ?)
+    `).run(now, now).lastInsertRowid as number);
+
+    expect(() => {
+      db.prepare(`
+        INSERT INTO item_content (item_id, content_type, text, created_at)
+        VALUES (?, 'bogus', 'nope', ?)
+      `).run(itemId, now);
+    }).toThrow(/CHECK constraint failed/);
+  });
+});
