@@ -409,3 +409,38 @@ describe('library cascade deletes', () => {
     ).toBe(0);
   });
 });
+
+describe('library url_hash uniqueness', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('rejects a second library_item with the same url_hash', () => {
+    const db = _getTestDb();
+
+    insertTestItem(db, {
+      sourceType: 'tiktok',
+      url: 'https://tiktok.com/1',
+      urlHash: 'samehash',
+    });
+
+    expect(() => {
+      insertTestItem(db, {
+        sourceType: 'tiktok',
+        url: 'https://tiktok.com/2',
+        urlHash: 'samehash',
+      });
+    }).toThrow(/UNIQUE constraint failed/);
+  });
+
+  it('allows multiple items with NULL url_hash (notes, voice, screenshots)', () => {
+    const db = _getTestDb();
+
+    insertTestItem(db, { sourceType: 'note' });
+    insertTestItem(db, { sourceType: 'voice' });
+    insertTestItem(db, { sourceType: 'screenshot' });
+
+    const count = (db.prepare(`SELECT COUNT(*) AS n FROM library_items WHERE url_hash IS NULL`).get() as { n: number }).n;
+    expect(count).toBe(3);
+  });
+});
