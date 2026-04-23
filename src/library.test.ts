@@ -458,7 +458,7 @@ describe('library CHECK constraints', () => {
         INSERT INTO library_items (source_type, captured_at, project, created_at)
         VALUES ('bluesky', ?, 'general', ?)
       `).run(now, now);
-    }).toThrow(/CHECK constraint failed/);
+    }).toThrow(/CHECK constraint failed: source_type IN/);
   });
 
   it('rejects an unknown project', () => {
@@ -469,7 +469,7 @@ describe('library CHECK constraints', () => {
         INSERT INTO library_items (source_type, captured_at, project, created_at)
         VALUES ('tiktok', ?, 'world_domination', ?)
       `).run(now, now);
-    }).toThrow(/CHECK constraint failed/);
+    }).toThrow(/CHECK constraint failed: project IN/);
   });
 
   it('rejects an unknown media_type', () => {
@@ -481,7 +481,7 @@ describe('library CHECK constraints', () => {
         INSERT INTO item_media (item_id, media_type, storage, created_at)
         VALUES (?, 'gif', 'local', ?)
       `).run(itemId, now);
-    }).toThrow(/CHECK constraint failed/);
+    }).toThrow(/CHECK constraint failed: media_type IN/);
   });
 
   it('rejects an unknown storage value', () => {
@@ -493,7 +493,7 @@ describe('library CHECK constraints', () => {
         INSERT INTO item_media (item_id, media_type, storage, created_at)
         VALUES (?, 'image', 's3', ?)
       `).run(itemId, now);
-    }).toThrow(/CHECK constraint failed/);
+    }).toThrow(/CHECK constraint failed: storage IN/);
   });
 
   it('rejects an unknown relation_type', () => {
@@ -506,7 +506,7 @@ describe('library CHECK constraints', () => {
         INSERT INTO item_relationships (source_item_id, target_item_id, relation_type, created_at)
         VALUES (?, ?, 'quantum_entangled', ?)
       `).run(a, b, now);
-    }).toThrow(/CHECK constraint failed/);
+    }).toThrow(/CHECK constraint failed: relation_type IN/);
   });
 
   it('rejects an unknown tag_type', () => {
@@ -518,7 +518,7 @@ describe('library CHECK constraints', () => {
         INSERT INTO item_tags (item_id, tag, tag_type, created_at)
         VALUES (?, 'abc', 'unknown_bucket', ?)
       `).run(itemId, now);
-    }).toThrow(/CHECK constraint failed/);
+    }).toThrow(/CHECK constraint failed: tag_type IN/);
   });
 
   it('rejects an unknown content_type', () => {
@@ -530,6 +530,6 @@ describe('library CHECK constraints', () => {
         INSERT INTO item_content (item_id, content_type, text, created_at)
         VALUES (?, 'video_transcription_beta', 'hi', ?)
       `).run(itemId, now);
-    }).toThrow(/CHECK constraint failed/);
+    }).toThrow(/CHECK constraint failed: content_type IN/);
   });
 });
