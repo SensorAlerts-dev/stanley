@@ -15,6 +15,27 @@ function getIndexes(db: Database.Database, table: string): string[] {
   ).all(table) as Array<{ name: string }>).map((r) => r.name);
 }
 
+/** Insert a minimal library_items row and return its id. For tests that
+ * need a parent row but don't care about the specific columns. */
+function insertTestItem(
+  db: Database.Database,
+  opts: { sourceType?: string; project?: string; url?: string; urlHash?: string } = {},
+): number {
+  const now = Math.floor(Date.now() / 1000);
+  const row = db.prepare(`
+    INSERT INTO library_items (source_type, url, url_hash, captured_at, project, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    opts.sourceType ?? 'note',
+    opts.url ?? null,
+    opts.urlHash ?? null,
+    now,
+    opts.project ?? 'general',
+    now,
+  );
+  return row.lastInsertRowid as number;
+}
+
 describe('library schema', () => {
   beforeEach(() => {
     _initTestDatabase();
@@ -188,5 +209,141 @@ describe('LIBRARY_ROOT config', () => {
     const config = await import('./config.js');
     expect(config.LIBRARY_ROOT).toMatch(/claudeclaw-library$/);
     expect(config.LIBRARY_ROOT.startsWith('/')).toBe(true);
+  });
+});
+
+describe('library round-trip', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('inserts a library_item and satellite rows, reads them all back intact', () => {
+    const db = _getTestDb();
+    const now = Math.floor(Date.now() / 1000);
+
+    // 1. Insert the canonical item
+    const itemId = (db.prepare(`
+      INSERT INTO library_items (
+        agent_id, chat_id, source_type, url, url_hash, title, author,
+        captured_at, last_seen_at, project, user_note, source_meta,
+        reviewed_at, pinned, enriched_at, related_at, analyzed_at, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      'collector',
+      'chat123',
+      'tiktok',
+      'https://tiktok.com/@brewlife/video/123',
+      'abc123deadbeef',
+      'How I brew water kefir',
+      '@brewlife',
+      now,
+      now,
+      'pure_bliss',
+      'seen 2M times',
+      JSON.stringify({ views: 2100000, likes: 80000 }),
+      null,        // reviewed_at
+      0,           // pinned
+      null, null, null,  // lifecycle timestamps all NULL
+      now,
+    ).lastInsertRowid as number);
+
+    // 2. Second item (needed for the relationship row below) — uses the new helper
+    const itemId2 = insertTestItem(db, { sourceType: 'reddit', project: 'pure_bliss' });
+
+    // 3. Attach two media rows
+    db.prepare(`
+      INSERT INTO item_media (item_id, media_type, file_path, storage, mime_type, bytes, created_at)
+      VALUES (?, 'image', 'pure_bliss/screenshots/20260423-1512_1_kefir.png', 'local', 'image/png', 53421, ?)
+    `).run(itemId, now);
+    db.prepare(`
+      INSERT INTO item_media (item_id, media_type, file_path, storage, drive_file_id, drive_url, mime_type, bytes, created_at)
+      VALUES (?, 'video', 'pure_bliss/videos/20260423-1512_1_kefir.mp4', 'both', 'drive123', 'https://drive.google.com/file/d/drive123', 'video/mp4', 1048576, ?)
+    `).run(itemId, now);
+
+    // 4. Attach content rows
+    db.prepare(`
+      INSERT INTO item_content (item_id, content_type, text, source_agent, token_count, created_at)
+      VALUES (?, 'scraped_summary', 'Maker fermenting water kefir at home.', 'collector', 8, ?)
+    `).run(itemId, now);
+    db.prepare(`
+      INSERT INTO item_content (item_id, content_type, text, source_agent, token_count, created_at)
+      VALUES (?, 'user_note', 'interesting fermentation technique', null, null, ?)
+    `).run(itemId, now);
+
+    // 5. Tags
+    db.prepare(`
+      INSERT INTO item_tags (item_id, tag, tag_type, confidence, source_agent, created_at)
+      VALUES (?, 'kefir', 'topic', 0.95, 'relationship', ?)
+    `).run(itemId, now);
+    db.prepare(`
+      INSERT INTO item_tags (item_id, tag, tag_type, confidence, source_agent, created_at)
+      VALUES (?, '@brewlife', 'person', 1.0, 'collector', ?)
+    `).run(itemId, now);
+
+    // 6. Relationship
+    db.prepare(`
+      INSERT INTO item_relationships (source_item_id, target_item_id, relation_type, similarity_score, reason, source_agent, created_at)
+      VALUES (?, ?, 'same_topic', 0.87, 'both about fermented drinks', 'relationship', ?)
+    `).run(itemId, itemId2, now);
+
+    // 7. Embedding
+    const fakeVec = Buffer.alloc(12);
+    fakeVec.writeFloatLE(0.1, 0);
+    fakeVec.writeFloatLE(0.2, 4);
+    fakeVec.writeFloatLE(0.3, 8);
+    db.prepare(`
+      INSERT INTO item_embeddings (item_id, model, dimensions, embedding, source_text_hash, created_at)
+      VALUES (?, 'gemini-embedding-exp-03-07', 3, ?, 'hash-of-content', ?)
+    `).run(itemId, fakeVec, now);
+
+    // ── Read everything back ────────────────────────────────────────
+    const item = db.prepare(`SELECT * FROM library_items WHERE id = ?`).get(itemId) as Record<string, unknown>;
+    expect(item.source_type).toBe('tiktok');
+    expect(item.url).toBe('https://tiktok.com/@brewlife/video/123');
+    expect(item.url_hash).toBe('abc123deadbeef');
+    expect(item.author).toBe('@brewlife');
+    expect(item.project).toBe('pure_bliss');
+    expect(item.pinned).toBe(0);
+    expect(item.enriched_at).toBeNull();
+    expect(JSON.parse(item.source_meta as string)).toEqual({ views: 2100000, likes: 80000 });
+
+    const media = db.prepare(`SELECT * FROM item_media WHERE item_id = ? ORDER BY id`).all(itemId);
+    expect(media.length).toBe(2);
+    expect((media[0] as Record<string, unknown>).media_type).toBe('image');
+    expect((media[0] as Record<string, unknown>).storage).toBe('local');
+    expect((media[1] as Record<string, unknown>).storage).toBe('both');
+    expect((media[1] as Record<string, unknown>).drive_file_id).toBe('drive123');
+
+    const content = db.prepare(`SELECT * FROM item_content WHERE item_id = ? ORDER BY id`).all(itemId);
+    expect(content.length).toBe(2);
+    expect((content[0] as Record<string, unknown>).content_type).toBe('scraped_summary');
+    expect((content[1] as Record<string, unknown>).content_type).toBe('user_note');
+
+    const tags = db.prepare(`SELECT * FROM item_tags WHERE item_id = ? ORDER BY tag`).all(itemId);
+    expect(tags.length).toBe(2);
+    expect((tags[0] as Record<string, unknown>).tag).toBe('@brewlife');
+    expect((tags[0] as Record<string, unknown>).tag_type).toBe('person');
+    expect((tags[1] as Record<string, unknown>).tag).toBe('kefir');
+    expect((tags[1] as Record<string, unknown>).tag_type).toBe('topic');
+
+    const rels = db.prepare(`SELECT * FROM item_relationships WHERE source_item_id = ?`).all(itemId);
+    expect(rels.length).toBe(1);
+    expect((rels[0] as Record<string, unknown>).relation_type).toBe('same_topic');
+    expect((rels[0] as Record<string, unknown>).target_item_id).toBe(itemId2);
+    expect((rels[0] as Record<string, unknown>).similarity_score).toBe(0.87);
+
+    const emb = db.prepare(`SELECT * FROM item_embeddings WHERE item_id = ?`).get(itemId) as Record<string, unknown>;
+    expect(emb.dimensions).toBe(3);
+    expect(emb.model).toBe('gemini-embedding-exp-03-07');
+    const vecOut = emb.embedding as Buffer;
+    expect(vecOut.readFloatLE(0)).toBeCloseTo(0.1, 5);
+    expect(vecOut.readFloatLE(4)).toBeCloseTo(0.2, 5);
+    expect(vecOut.readFloatLE(8)).toBeCloseTo(0.3, 5);
+
+    // FTS search over the content we inserted
+    const hits = db.prepare(`
+      SELECT item_id FROM item_content_fts WHERE item_content_fts MATCH 'fermentation'
+    `).all() as Array<{ item_id: number }>;
+    expect(hits.some((h) => h.item_id === itemId)).toBe(true);
   });
 });
