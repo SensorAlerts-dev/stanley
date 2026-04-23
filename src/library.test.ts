@@ -570,6 +570,43 @@ describe('library.ts URL helpers', () => {
   });
 });
 
+describe('library.ts project inference', () => {
+  it('infers pure_bliss from kefir keyword', async () => {
+    const { inferProject } = await import('./library.js');
+    expect(inferProject('how to make water kefir at home')).toBe('pure_bliss');
+  });
+
+  it('infers octohive from octopus keyword', async () => {
+    const { inferProject } = await import('./library.js');
+    expect(inferProject('my octopus died yesterday')).toBe('octohive');
+  });
+
+  it('infers octohive from cephalopod keyword', async () => {
+    const { inferProject } = await import('./library.js');
+    expect(inferProject('cephalopod cognition study')).toBe('octohive');
+  });
+
+  it('returns general for neutral content', async () => {
+    const { inferProject } = await import('./library.js');
+    expect(inferProject('random tech article about databases')).toBe('general');
+  });
+
+  it('uses URL hints for inference', async () => {
+    const { inferProject } = await import('./library.js');
+    expect(inferProject('check this out', 'https://example.com/kefir-guide')).toBe('pure_bliss');
+  });
+
+  it('is case-insensitive', async () => {
+    const { inferProject } = await import('./library.js');
+    expect(inferProject('KEFIR brewing guide')).toBe('pure_bliss');
+  });
+
+  it('octohive wins over pure_bliss when both match (hardcoded priority)', async () => {
+    const { inferProject } = await import('./library.js');
+    expect(inferProject('octopus mascot for new water kefir brand')).toBe('octohive');
+  });
+});
+
 describe('library CHECK constraints', () => {
   beforeEach(() => {
     _initTestDatabase();

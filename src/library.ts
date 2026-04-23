@@ -70,3 +70,38 @@ export function canonicalizeUrl(rawUrl: string): string {
 export function urlHash(canonical: string): string {
   return crypto.createHash('sha1').update(canonical).digest('hex');
 }
+
+// ── Project inference ─────────────────────────────────────────────────
+// Keyword-based heuristic. Memobot can override with an explicit --project
+// flag. When no keywords match, falls back to 'general'. Priority:
+// octohive > pure_bliss > personal > general.
+
+export type Project = 'pure_bliss' | 'octohive' | 'personal' | 'general';
+
+export const PURE_BLISS_KEYWORDS = [
+  'kefir', 'water kefir', 'fermented', 'hydration', 'pure bliss',
+  'probiotic', 'scoby', 'gut health',
+];
+
+export const OCTOHIVE_KEYWORDS = [
+  'octopus', 'cephalopod', 'tentacle', 'aquarium', 'marine biology',
+  'octohive',
+];
+
+export const PERSONAL_KEYWORDS: string[] = [
+  // Intentionally empty. Personal is never keyword-inferred -- it is only
+  // assigned when the user types "for personal" in their message, or via
+  // an explicit /project reassign.
+];
+
+export function inferProject(text: string, url?: string): Project {
+  const haystack = `${text} ${url ?? ''}`.toLowerCase();
+
+  for (const kw of OCTOHIVE_KEYWORDS) {
+    if (haystack.includes(kw.toLowerCase())) return 'octohive';
+  }
+  for (const kw of PURE_BLISS_KEYWORDS) {
+    if (haystack.includes(kw.toLowerCase())) return 'pure_bliss';
+  }
+  return 'general';
+}
