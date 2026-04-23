@@ -507,6 +507,51 @@ describe('library schema on existing database', () => {
   });
 });
 
+describe('library.ts URL helpers', () => {
+  it('canonicalizeUrl lowercases scheme and host', async () => {
+    const { canonicalizeUrl } = await import('./library.js');
+    expect(canonicalizeUrl('HTTPS://TikTok.COM/@brewlife/video/123')).toBe('https://tiktok.com/@brewlife/video/123');
+  });
+
+  it('canonicalizeUrl strips utm_* and other noise query params', async () => {
+    const { canonicalizeUrl } = await import('./library.js');
+    const input = 'https://example.com/post?utm_source=tw&utm_medium=social&fbclid=abc&ref=home&id=42';
+    expect(canonicalizeUrl(input)).toBe('https://example.com/post?id=42');
+  });
+
+  it('canonicalizeUrl removes trailing slash except on root path', async () => {
+    const { canonicalizeUrl } = await import('./library.js');
+    expect(canonicalizeUrl('https://example.com/post/')).toBe('https://example.com/post');
+    expect(canonicalizeUrl('https://example.com/')).toBe('https://example.com/');
+  });
+
+  it('canonicalizeUrl trims whitespace', async () => {
+    const { canonicalizeUrl } = await import('./library.js');
+    expect(canonicalizeUrl('  https://example.com/post  ')).toBe('https://example.com/post');
+  });
+
+  it('canonicalizeUrl strips t= param for tiktok share URLs', async () => {
+    const { canonicalizeUrl } = await import('./library.js');
+    expect(canonicalizeUrl('https://tiktok.com/@x/video/123?t=5s')).toBe('https://tiktok.com/@x/video/123');
+  });
+
+  it('urlHash returns 40-char SHA1 hex', async () => {
+    const { urlHash } = await import('./library.js');
+    const h = urlHash('https://example.com/a');
+    expect(h).toMatch(/^[a-f0-9]{40}$/);
+  });
+
+  it('urlHash is deterministic for identical input', async () => {
+    const { urlHash } = await import('./library.js');
+    expect(urlHash('https://example.com/a')).toBe(urlHash('https://example.com/a'));
+  });
+
+  it('urlHash differs for different canonical URLs', async () => {
+    const { urlHash } = await import('./library.js');
+    expect(urlHash('https://example.com/a')).not.toBe(urlHash('https://example.com/b'));
+  });
+});
+
 describe('library CHECK constraints', () => {
   beforeEach(() => {
     _initTestDatabase();
