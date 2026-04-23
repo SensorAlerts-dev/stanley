@@ -98,7 +98,27 @@ async function run(): Promise<void> {
         process.exit(1);
       }
 
-      const enrichedAt = flags.enriched === true
+      const { insertItem, addContent, addTag, queueProcessorTask, fetchOgMeta } = await import('./library.js');
+
+      // --auto-scrape: fetch the URL and extract og: tags before insert.
+      // Deterministic og: parsing via built-in https, no Playwright, no
+      // LLM reasoning. Memobot uses this to skip its own scraping step.
+      let scrapedTitle: string | undefined;
+      let scrapedAuthor: string | undefined;
+      let scrapedSummary: string | undefined;
+      let scrapeSucceeded = false;
+      if (flags['auto-scrape'] === true && typeof flags.url === 'string') {
+        const meta = await fetchOgMeta(flags.url);
+        if (meta && (meta.title || meta.description)) {
+          scrapedTitle = meta.title ?? undefined;
+          scrapedAuthor = meta.author ?? undefined;
+          scrapedSummary = meta.description ?? undefined;
+          scrapeSucceeded = true;
+        }
+      }
+
+      // --enriched explicit flag OR implicit when auto-scrape succeeded
+      const enrichedAt = (flags.enriched === true || scrapeSucceeded)
         ? Math.floor(Date.now() / 1000)
         : undefined;
 
@@ -106,7 +126,10 @@ async function run(): Promise<void> {
         ? JSON.parse(flags['source-meta'] as string)
         : undefined;
 
-      const { insertItem, addContent, addTag, queueProcessorTask } = await import('./library.js');
+      // Explicit flags beat auto-scrape results. Memobot may override if
+      // it has better info from the user message.
+      const title = (typeof flags.title === 'string' ? flags.title : undefined) ?? scrapedTitle;
+      const author = (typeof flags.author === 'string' ? flags.author : undefined) ?? scrapedAuthor;
 
       const result = insertItem({
         source_type: sourceType as SourceType,
@@ -114,11 +137,20 @@ async function run(): Promise<void> {
         user_note: typeof flags['user-note'] === 'string' ? flags['user-note'] : undefined,
         user_message: typeof flags['user-message'] === 'string' ? flags['user-message'] : undefined,
         project: typeof flags.project === 'string' ? flags.project as Project : undefined,
-        title: typeof flags.title === 'string' ? flags.title : undefined,
-        author: typeof flags.author === 'string' ? flags.author : undefined,
+        title,
+        author,
         source_meta: sourceMeta,
         enriched_at: enrichedAt,
       });
+
+      // If auto-scrape produced a summary, write it as scraped_summary content
+      if (scrapedSummary && !result.is_duplicate) {
+        addContent(result.id, {
+          content_type: 'scraped_summary',
+          text: scrapedSummary,
+          source_agent: 'library-cli',
+        });
+      }
 
       // Collect repeatable --content and --tag flags (parseFlags only keeps last)
       const allContentFlags: string[] = [];

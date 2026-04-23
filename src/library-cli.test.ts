@@ -342,3 +342,34 @@ describe('library-cli save auto-logs hive_mind', () => {
     db.close();
   });
 });
+
+describe('library-cli save --auto-scrape', () => {
+  // NOTE: end-to-end auto-scrape success via CLI subprocess can't be tested
+  // here because execFileSync blocks the test process event loop while the
+  // subprocess runs, preventing any in-process HTTP test server from
+  // responding. The success path is tested at the fetchOgMeta unit level in
+  // library.test.ts and verified manually via `node dist/library-cli.js
+  // save --url https://example.com/ --auto-scrape`. Only the fail-fast URL
+  // fallback is testable here (connection-refused returns without a
+  // response, so no server is needed).
+
+  it('saves URL-only when fetch fails (no enriched_at, no scraped_summary)', async () => {
+    const badUrl = 'http://127.0.0.1:1/unreachable-' + Date.now();
+    const { stdout, exitCode } = runCli([
+      'save',
+      '--source-type', 'article',
+      '--url', badUrl,
+      '--auto-scrape',
+    ]);
+    expect(exitCode).toBe(0);
+    const out = JSON.parse(stdout);
+    expect(out.id).toBeGreaterThan(0);
+
+    const Database = (await import('better-sqlite3')).default;
+    const db = new Database(path.join(PROJECT_ROOT, 'store', 'claudeclaw.db'), { readonly: true });
+    const row = db.prepare(`SELECT title, enriched_at FROM library_items WHERE id = ?`).get(out.id) as { title: string | null; enriched_at: number | null };
+    expect(row.title).toBeNull();
+    expect(row.enriched_at).toBeNull();
+    db.close();
+  }, 15000);
+});

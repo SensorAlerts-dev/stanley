@@ -1007,3 +1007,119 @@ describe('library.ts lifecycle setters', () => {
     expect((db.prepare(`SELECT COUNT(*) AS n FROM item_tags WHERE item_id = ?`).get(item.id) as { n: number }).n).toBe(0);
   });
 });
+
+describe('library.ts extractOgMeta', () => {
+  it('extracts og:title, og:description, og:image', async () => {
+    const { extractOgMeta } = await import('./library.js');
+    const html = `<!DOCTYPE html>
+<html><head>
+  <meta property="og:title" content="Great Article Title">
+  <meta property="og:description" content="A short description of the article.">
+  <meta property="og:image" content="https://example.com/thumb.jpg">
+</head><body></body></html>`;
+    const meta = extractOgMeta(html, 'https://example.com/article');
+    expect(meta.title).toBe('Great Article Title');
+    expect(meta.description).toBe('A short description of the article.');
+    expect(meta.image).toBe('https://example.com/thumb.jpg');
+  });
+
+  it('falls back to <title> tag when og:title is absent', async () => {
+    const { extractOgMeta } = await import('./library.js');
+    const html = `<html><head><title>Page Title Here</title></head></html>`;
+    const meta = extractOgMeta(html, 'https://example.com/x');
+    expect(meta.title).toBe('Page Title Here');
+  });
+
+  it('decodes HTML entities', async () => {
+    const { extractOgMeta } = await import('./library.js');
+    const html = `<meta property="og:title" content="Ben &amp; Jerry&#39;s">`;
+    const meta = extractOgMeta(html, 'https://example.com/');
+    expect(meta.title).toBe("Ben & Jerry's");
+  });
+
+  it('handles reversed attribute order', async () => {
+    const { extractOgMeta } = await import('./library.js');
+    const html = `<meta content="Reversed" property="og:title" />`;
+    const meta = extractOgMeta(html, 'https://example.com/');
+    expect(meta.title).toBe('Reversed');
+  });
+
+  it('returns null fields when no meta tags present', async () => {
+    const { extractOgMeta } = await import('./library.js');
+    const meta = extractOgMeta('<html><body>Nothing here</body></html>', 'https://example.com/');
+    expect(meta.title).toBeNull();
+    expect(meta.description).toBeNull();
+  });
+
+  it('extracts twitter:* as fallback when og:* missing', async () => {
+    const { extractOgMeta } = await import('./library.js');
+    const html = `<meta name="twitter:title" content="Twitter Title Only">`;
+    const meta = extractOgMeta(html, 'https://example.com/');
+    expect(meta.title).toBe('Twitter Title Only');
+  });
+
+  it('extracts article:author', async () => {
+    const { extractOgMeta } = await import('./library.js');
+    const html = `<meta property="article:author" content="Jane Doe">`;
+    const meta = extractOgMeta(html, 'https://example.com/');
+    expect(meta.author).toBe('Jane Doe');
+  });
+
+  it('sets finalUrl from argument', async () => {
+    const { extractOgMeta } = await import('./library.js');
+    const meta = extractOgMeta('<html></html>', 'https://example.com/after-redirect');
+    expect(meta.finalUrl).toBe('https://example.com/after-redirect');
+  });
+});
+
+describe('library.ts fetchOgMeta', () => {
+  it('fetches a local server and extracts og: metadata', async () => {
+    const { fetchOgMeta } = await import('./library.js');
+    const http = await import('http');
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(`<!DOCTYPE html>
+<html><head>
+  <meta property="og:title" content="Local Test Title">
+  <meta property="og:description" content="A local test description.">
+</head></html>`);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as { port: number }).port;
+
+    const meta = await fetchOgMeta(`http://127.0.0.1:${port}/x`);
+    expect(meta).not.toBeNull();
+    expect(meta!.title).toBe('Local Test Title');
+    expect(meta!.description).toBe('A local test description.');
+
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }, 15000);
+
+  it('returns null on connection refused', async () => {
+    const { fetchOgMeta } = await import('./library.js');
+    const meta = await fetchOgMeta('http://127.0.0.1:1/unreachable');
+    expect(meta).toBeNull();
+  }, 15000);
+
+  it('follows a redirect', async () => {
+    const { fetchOgMeta } = await import('./library.js');
+    const http = await import('http');
+    const server = http.createServer((req, res) => {
+      if (req.url === '/start') {
+        res.writeHead(302, { 'Location': '/final' });
+        res.end();
+      } else {
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(`<meta property="og:title" content="Redirected Page">`);
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as { port: number }).port;
+
+    const meta = await fetchOgMeta(`http://127.0.0.1:${port}/start`);
+    expect(meta).not.toBeNull();
+    expect(meta!.title).toBe('Redirected Page');
+
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }, 15000);
+});

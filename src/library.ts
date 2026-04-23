@@ -82,6 +82,153 @@ export function urlHash(canonical: string): string {
   return crypto.createHash('sha1').update(canonical).digest('hex');
 }
 
+// ── OG meta extraction ────────────────────────────────────────────────
+// Lightweight URL enrichment for memobot. Fetches the URL with the built-in
+// https module, follows up to 3 redirects, parses og:* tags and <title> via
+// regex. No Playwright, no WebFetch tool, no LLM reasoning -- just a
+// deterministic fetch + parse that library-cli invokes on --auto-scrape.
+//
+// Works well for 90%+ of the web (anything that ships og: meta tags).
+// Sparse JS-heavy sites (TikTok embed pages, Instagram without login) fall
+// back to URL-as-title. Phase 3 Processor agent will do deeper scraping
+// via Playwright for items that land without good og: data.
+
+export interface OgMeta {
+  title: string | null;
+  description: string | null;
+  image: string | null;
+  siteName: string | null;
+  author: string | null;
+  finalUrl: string;
+}
+
+/** Extract og:* and <title> tags from an HTML string. Pure function, testable. */
+export function extractOgMeta(html: string, finalUrl: string): OgMeta {
+  const meta: OgMeta = {
+    title: null,
+    description: null,
+    image: null,
+    siteName: null,
+    author: null,
+    finalUrl,
+  };
+
+  // Match <meta property="og:X" content="Y"> in either attribute order.
+  // Also handle name= (for twitter:card fallbacks).
+  const metaRegex = /<meta\s+([^>]+?)\s*\/?>/gi;
+  const attrRegex = /(\w[\w:-]*)\s*=\s*["']([^"']*)["']/g;
+
+  for (const m of html.matchAll(metaRegex)) {
+    const attrs: Record<string, string> = {};
+    for (const a of m[1].matchAll(attrRegex)) {
+      attrs[a[1].toLowerCase()] = a[2];
+    }
+    const key = (attrs.property || attrs.name || '').toLowerCase();
+    const content = attrs.content;
+    if (!content) continue;
+
+    if (key === 'og:title' && !meta.title) meta.title = decodeEntities(content);
+    else if (key === 'og:description' && !meta.description) meta.description = decodeEntities(content);
+    else if (key === 'og:image' && !meta.image) meta.image = content;
+    else if (key === 'og:site_name' && !meta.siteName) meta.siteName = decodeEntities(content);
+    else if ((key === 'author' || key === 'article:author') && !meta.author) {
+      meta.author = decodeEntities(content);
+    }
+    else if (key === 'twitter:title' && !meta.title) meta.title = decodeEntities(content);
+    else if (key === 'twitter:description' && !meta.description) meta.description = decodeEntities(content);
+  }
+
+  // Fallback to <title> tag if og:title absent.
+  if (!meta.title) {
+    const t = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+    if (t) meta.title = decodeEntities(t[1].trim());
+  }
+
+  return meta;
+}
+
+function decodeEntities(s: string): string {
+  return s
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#x?([0-9a-fA-F]+);/g, (_, code) => String.fromCodePoint(parseInt(code, code.startsWith('x') || code.startsWith('X') ? 16 : 10)));
+}
+
+/**
+ * Fetch a URL and return its og: metadata. Returns null on network error.
+ * Follows up to 3 redirects. 10s timeout. Caps response at 512 KB.
+ */
+export async function fetchOgMeta(url: string, timeoutMs = 10000): Promise<OgMeta | null> {
+  const maxRedirects = 3;
+  const maxBytes = 512 * 1024;
+
+  const follow = async (u: string, redirectsLeft: number): Promise<OgMeta | null> => {
+    const { default: https } = await import('https');
+    const { default: http } = await import('http');
+    const urlObj = new URL(u);
+    const client = urlObj.protocol === 'http:' ? http : https;
+
+    return new Promise((resolve) => {
+      const req = client.get(u, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; ClaudeClaw MemoBot og-fetcher/1.0)',
+          'Accept': 'text/html,application/xhtml+xml',
+        },
+      }, (res) => {
+        // Redirect?
+        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          res.resume();
+          if (redirectsLeft <= 0) {
+            resolve(null);
+            return;
+          }
+          const next = new URL(res.headers.location, u).toString();
+          follow(next, redirectsLeft - 1).then(resolve);
+          return;
+        }
+
+        if (!res.statusCode || res.statusCode >= 400) {
+          res.resume();
+          resolve(null);
+          return;
+        }
+
+        let bytes = 0;
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => {
+          bytes += chunk.length;
+          if (bytes > maxBytes) {
+            res.destroy();
+            return;
+          }
+          chunks.push(chunk);
+        });
+        res.on('end', () => {
+          const html = Buffer.concat(chunks).toString('utf8');
+          resolve(extractOgMeta(html, u));
+        });
+        res.on('error', () => resolve(null));
+      });
+
+      req.setTimeout(timeoutMs, () => {
+        req.destroy();
+        resolve(null);
+      });
+      req.on('error', () => resolve(null));
+    });
+  };
+
+  try {
+    return await follow(url, maxRedirects);
+  } catch {
+    return null;
+  }
+}
+
 // ── Project inference ─────────────────────────────────────────────────
 // Keyword-based heuristic. Memobot can override with an explicit --project
 // flag. When no keywords match, falls back to 'general'. Priority:
