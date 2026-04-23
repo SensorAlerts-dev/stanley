@@ -1,19 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import Database from 'better-sqlite3';
-import { _initTestDatabase } from './db.js';
+import type Database from 'better-sqlite3';
+import { _initTestDatabase, _getTestDb } from './db.js';
 
-// Access to the underlying DB for raw schema introspection in tests.
-// We use a fresh in-memory DB per test via _initTestDatabase(), then query
-// sqlite_master to verify tables/indexes/triggers exist.
+// Raw schema introspection: fresh in-memory DB per test via _initTestDatabase(),
+// then query sqlite_master / PRAGMA to verify tables, indexes, and triggers exist.
 function getTables(db: Database.Database): string[] {
   return (db.prepare(`SELECT name FROM sqlite_master WHERE type='table' ORDER BY name`).all() as Array<{ name: string }>)
     .map((r) => r.name);
 }
-
-// We need a handle to the underlying DB instance for introspection. Since
-// db.ts does not export getDb(), we reach it via a test-only helper we will
-// add in this task.
-import { _getTestDb } from './db.js';
 
 describe('library schema', () => {
   beforeEach(() => {
