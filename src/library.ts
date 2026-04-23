@@ -389,7 +389,7 @@ export function addMedia(itemId: number, opts: AddMediaOpts): number {
 }
 
 export interface AddContentOpts {
-  content_type: 'ocr' | 'scraped_summary' | 'transcript' | 'user_note';
+  content_type: 'ocr' | 'scraped_summary' | 'transcript' | 'user_note' | 'ai_summary';
   text: string;
   source_agent: string;
   token_count?: number;
