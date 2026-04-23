@@ -164,7 +164,7 @@ function claimOne(db: ReturnType<typeof _getTestDb>): ClaimedTask | null {
       .run(Math.floor(Date.now() / 1000), task.id);
     return task;
   });
-  return txn() ?? null;
+  return txn.immediate() ?? null;
 }
 
 function completeTask(
