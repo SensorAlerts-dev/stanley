@@ -9,6 +9,7 @@
 
 import { initDatabase } from './db.js';
 import { canonicalizeUrl, urlHash, _getTestDb } from './library.js';
+import type { SourceType, Project } from './library.js';
 
 initDatabase();
 
@@ -85,6 +86,77 @@ async function run(): Promise<void> {
       } else {
         console.log(JSON.stringify({ is_duplicate: false, canonical }));
       }
+      break;
+    }
+
+    case 'save': {
+      const flags = parseFlags(rest);
+
+      const sourceType = flags['source-type'] as string;
+      if (!sourceType) {
+        console.error('Error: save requires --source-type');
+        process.exit(1);
+      }
+
+      const enrichedAt = flags.enriched === true
+        ? Math.floor(Date.now() / 1000)
+        : undefined;
+
+      const sourceMeta = typeof flags['source-meta'] === 'string'
+        ? JSON.parse(flags['source-meta'] as string)
+        : undefined;
+
+      const { insertItem, addContent, addTag, queueProcessorTask } = await import('./library.js');
+
+      const result = insertItem({
+        source_type: sourceType as SourceType,
+        url: typeof flags.url === 'string' ? flags.url : undefined,
+        user_note: typeof flags['user-note'] === 'string' ? flags['user-note'] : undefined,
+        user_message: typeof flags['user-message'] === 'string' ? flags['user-message'] : undefined,
+        project: typeof flags.project === 'string' ? flags.project as Project : undefined,
+        title: typeof flags.title === 'string' ? flags.title : undefined,
+        author: typeof flags.author === 'string' ? flags.author : undefined,
+        source_meta: sourceMeta,
+        enriched_at: enrichedAt,
+      });
+
+      // Collect repeatable --content and --tag flags (parseFlags only keeps last)
+      const allContentFlags: string[] = [];
+      const allTagFlags: string[] = [];
+      for (let i = 0; i < rest.length; i++) {
+        if (rest[i] === '--content' && rest[i + 1] !== undefined) allContentFlags.push(rest[i + 1]);
+        if (rest[i] === '--tag' && rest[i + 1] !== undefined) allTagFlags.push(rest[i + 1]);
+      }
+
+      for (const cSpec of allContentFlags) {
+        const parsed = Object.fromEntries(cSpec.split(',').map(kv => {
+          const idx = kv.indexOf('=');
+          return [kv.slice(0, idx).trim(), kv.slice(idx + 1).trim()];
+        }));
+        addContent(result.id, {
+          content_type: parsed.content_type as 'ocr' | 'scraped_summary' | 'transcript' | 'user_note',
+          text: parsed.text,
+          source_agent: 'memobot',
+        });
+      }
+
+      for (const tSpec of allTagFlags) {
+        const parsed = Object.fromEntries(tSpec.split(',').map(kv => {
+          const idx = kv.indexOf('=');
+          return [kv.slice(0, idx).trim(), kv.slice(idx + 1).trim()];
+        }));
+        addTag(result.id, {
+          tag: parsed.tag,
+          tag_type: parsed.tag_type as 'topic' | 'person' | 'brand' | 'hashtag' | 'mood' | 'other',
+          source_agent: 'memobot',
+        });
+      }
+
+      if (typeof flags['queue-processor'] === 'string') {
+        queueProcessorTask(result.id, flags['queue-processor'] as string);
+      }
+
+      console.log(JSON.stringify(result));
       break;
     }
 

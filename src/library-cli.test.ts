@@ -57,3 +57,103 @@ describe('library-cli check-url', () => {
     expect(stderr).toContain('url');
   });
 });
+
+describe('library-cli save (no media)', () => {
+  it('saves a URL item and returns id in JSON', () => {
+    const url = 'https://example.com/save-test-' + Date.now();
+    const { stdout, exitCode } = runCli([
+      'save',
+      '--source-type', 'article',
+      '--url', url,
+      '--title', 'My Article',
+    ]);
+    expect(exitCode).toBe(0);
+    const out = JSON.parse(stdout);
+    expect(out.id).toBeGreaterThan(0);
+    expect(out.is_duplicate).toBe(false);
+  });
+
+  it('saving duplicate URL returns is_duplicate with existing id', () => {
+    const url = 'https://example.com/dupe-' + Date.now();
+    const first = runCli(['save', '--source-type', 'article', '--url', url]);
+    const firstOut = JSON.parse(first.stdout);
+    const second = runCli(['save', '--source-type', 'article', '--url', url, '--user-note', 'second save']);
+    const secondOut = JSON.parse(second.stdout);
+    expect(secondOut.is_duplicate).toBe(true);
+    expect(secondOut.id).toBe(firstOut.id);
+  });
+
+  it('save without url (note type) works', () => {
+    const { stdout, exitCode } = runCli([
+      'save',
+      '--source-type', 'note',
+      '--user-note', 'hello from CLI test',
+    ]);
+    expect(exitCode).toBe(0);
+    const out = JSON.parse(stdout);
+    expect(out.id).toBeGreaterThan(0);
+  });
+
+  it('save with --tag flag adds a tag row', async () => {
+    const { stdout } = runCli([
+      'save',
+      '--source-type', 'tiktok',
+      '--url', 'https://tiktok.com/@x/test-' + Date.now(),
+      '--tag', 'tag=@testcreator,tag_type=person',
+    ]);
+    const out = JSON.parse(stdout);
+    expect(out.id).toBeGreaterThan(0);
+    const Database = (await import('better-sqlite3')).default;
+    const db = new Database(path.join(PROJECT_ROOT, 'store', 'claudeclaw.db'), { readonly: true });
+    const tags = db.prepare(`SELECT tag FROM item_tags WHERE item_id = ?`).all(out.id) as Array<{ tag: string }>;
+    expect(tags.map(t => t.tag)).toContain('@testcreator');
+    db.close();
+  });
+
+  it('save with --content flag adds a content row', async () => {
+    const { stdout } = runCli([
+      'save',
+      '--source-type', 'article',
+      '--url', 'https://example.com/content-test-' + Date.now(),
+      '--content', 'content_type=scraped_summary,text=A brief summary of the article',
+    ]);
+    const out = JSON.parse(stdout);
+    expect(out.id).toBeGreaterThan(0);
+    const Database = (await import('better-sqlite3')).default;
+    const db = new Database(path.join(PROJECT_ROOT, 'store', 'claudeclaw.db'), { readonly: true });
+    const rows = db.prepare(`SELECT text FROM item_content WHERE item_id = ?`).all(out.id) as Array<{ text: string }>;
+    expect(rows.map(r => r.text)).toContain('A brief summary of the article');
+    db.close();
+  });
+
+  it('save with --queue-processor creates mission_task', async () => {
+    const { stdout } = runCli([
+      'save',
+      '--source-type', 'screenshot',
+      '--user-note', 'test screenshot caption',
+      '--queue-processor', 'screenshot needs OCR',
+    ]);
+    const out = JSON.parse(stdout);
+    const Database = (await import('better-sqlite3')).default;
+    const db = new Database(path.join(PROJECT_ROOT, 'store', 'claudeclaw.db'), { readonly: true });
+    const tasks = db.prepare(`SELECT prompt FROM mission_tasks WHERE assigned_agent = 'processor' AND prompt LIKE ?`).all('%' + out.id + '%') as Array<{ prompt: string }>;
+    expect(tasks.length).toBeGreaterThan(0);
+    db.close();
+  });
+
+  it('save with --enriched flag sets enriched_at', async () => {
+    const url = 'https://example.com/enriched-' + Date.now();
+    const { stdout } = runCli([
+      'save',
+      '--source-type', 'article',
+      '--url', url,
+      '--enriched',
+    ]);
+    const out = JSON.parse(stdout);
+    const Database = (await import('better-sqlite3')).default;
+    const db = new Database(path.join(PROJECT_ROOT, 'store', 'claudeclaw.db'), { readonly: true });
+    const row = db.prepare(`SELECT enriched_at FROM library_items WHERE id = ?`).get(out.id) as { enriched_at: number | null };
+    expect(row.enriched_at).toBeGreaterThan(0);
+    db.close();
+  });
+});
