@@ -104,6 +104,22 @@ export async function handleMemobotMessage(message: string): Promise<HandlerResu
     return handleSlashCommand(trimmed);
   }
 
+  // Stanley's bot layer prepends one of these prefixes when the user
+  // sends an attachment. Intercept those BEFORE the URL / note fallbacks
+  // so memobot saves the file instead of treating the prompt as text.
+  const attachment = detectAttachment(trimmed);
+  if (attachment) {
+    return saveAttachment(attachment);
+  }
+
+  // Voice notes arrive as "[Voice transcribed]: <text>" (Telegram/Groq
+  // handles transcription before we see it). Save as source_type=voice
+  // with the transcript as the note body.
+  const voiceMatch = trimmed.match(/^\[Voice transcribed\]:\s*([\s\S]+)$/);
+  if (voiceMatch) {
+    return saveVoiceTranscript(voiceMatch[1].trim());
+  }
+
   // URL (with or without accompanying text)
   const urlMatch = extractFirstUrl(trimmed);
   if (urlMatch) {
@@ -112,6 +128,147 @@ export async function handleMemobotMessage(message: string): Promise<HandlerResu
 
   // Plain text -> save as note
   return saveNote(trimmed);
+}
+
+// ── Attachment detection + save ───────────────────────────────────────
+
+export interface DetectedAttachment {
+  kind: 'Photo' | 'Document' | 'Video';
+  filePath: string;
+  filename?: string;
+  caption?: string;
+}
+
+/**
+ * Detect Stanley's "Photo received / Document received / Video received"
+ * prefixes and extract path + caption. Returns null when the message is
+ * not an attachment prompt.
+ */
+export function detectAttachment(message: string): DetectedAttachment | null {
+  // "Photo received. File saved at: <path>\nCaption: \"...\"\n..."
+  let m = message.match(/^Photo received\. File saved at: (.+?)(?:\n|$)/);
+  if (m) {
+    return { kind: 'Photo', filePath: m[1].trim(), caption: extractCaption(message) };
+  }
+
+  // "Document received: <filename>\nFile saved at: <path>\n..."
+  m = message.match(/^Document received: (.+?)\nFile saved at: (.+?)(?:\n|$)/);
+  if (m) {
+    return {
+      kind: 'Document',
+      filename: m[1].trim(),
+      filePath: m[2].trim(),
+      caption: extractCaption(message),
+    };
+  }
+
+  // "Video received. File saved at: <path>\n..."
+  m = message.match(/^Video received\. File saved at: (.+?)(?:\n|$)/);
+  if (m) {
+    return { kind: 'Video', filePath: m[1].trim(), caption: extractCaption(message) };
+  }
+
+  return null;
+}
+
+function extractCaption(message: string): string | undefined {
+  const m = message.match(/^Caption: "([^"]*)"/m);
+  return m ? m[1] : undefined;
+}
+
+/**
+ * Classify a file by extension into the media_type + source_type the
+ * CLI expects. Returns 'other' for unknown extensions.
+ */
+export function classifyFile(filePath: string): {
+  mediaType: 'image' | 'video' | 'pdf' | 'audio' | 'other';
+  sourceType: 'screenshot' | 'file';
+  mime: string;
+} {
+  const ext = path.extname(filePath).toLowerCase().replace(/^\./, '');
+
+  // Images -> treated as screenshots in source_type
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif'].includes(ext)) {
+    return {
+      mediaType: 'image',
+      sourceType: 'screenshot',
+      mime: ext === 'jpg' ? 'image/jpeg' : `image/${ext === 'heic' ? 'heic' : ext}`,
+    };
+  }
+  if (ext === 'pdf') return { mediaType: 'pdf', sourceType: 'file', mime: 'application/pdf' };
+  if (['mp4', 'mov', 'm4v', 'webm', 'avi', 'mkv'].includes(ext)) {
+    return { mediaType: 'video', sourceType: 'file', mime: `video/${ext === 'mov' ? 'quicktime' : ext}` };
+  }
+  if (['mp3', 'wav', 'm4a', 'ogg', 'flac', 'aac'].includes(ext)) {
+    return { mediaType: 'audio', sourceType: 'file', mime: `audio/${ext}` };
+  }
+  return { mediaType: 'other', sourceType: 'file', mime: 'application/octet-stream' };
+}
+
+async function saveAttachment(a: DetectedAttachment): Promise<HandlerResult> {
+  const classified = classifyFile(a.filename ?? a.filePath);
+  const note = a.caption ?? '';
+  const queueReason =
+    classified.mediaType === 'image' ? 'screenshot needs OCR' :
+    classified.mediaType === 'video' ? 'video needs transcription' :
+    classified.mediaType === 'audio' ? 'audio needs transcription' :
+    classified.mediaType === 'pdf' ? 'pdf needs text extraction' :
+    'file needs extraction';
+
+  const args = [
+    'save',
+    '--source-type', classified.sourceType,
+    '--media-temp-path', a.filePath,
+    '--media-type', classified.mediaType,
+    '--media-mime', classified.mime,
+    '--queue-processor', queueReason,
+  ];
+  if (note.length > 0) args.push('--user-note', note);
+
+  const result = await runCli(args);
+  if (result.exitCode !== 0) {
+    logger.error({ stderr: result.stderr, args }, 'library-cli save failed (attachment)');
+    return { reply: `Save failed: ${result.stderr.trim() || 'unknown error'}. Try again.` };
+  }
+
+  let parsed: { id: number };
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    return { reply: 'Save failed: invalid CLI output. Try again.' };
+  }
+
+  const label = note.length > 0 ? note : a.filename ?? path.basename(a.filePath);
+  return {
+    reply: `#${parsed.id} saved (${classified.mediaType}): ${label.length > 60 ? label.slice(0, 60) + '...' : label}\nEnrichment coming when processor runs.`,
+  };
+}
+
+async function saveVoiceTranscript(transcript: string): Promise<HandlerResult> {
+  if (transcript.length === 0) return { reply: 'Empty voice note.' };
+
+  const args = [
+    'save',
+    '--source-type', 'voice',
+    '--user-note', transcript,
+    '--content', `content_type=transcript,text=${transcript}`,
+    '--enriched',
+  ];
+  const result = await runCli(args);
+  if (result.exitCode !== 0) {
+    logger.error({ stderr: result.stderr }, 'library-cli save failed (voice)');
+    return { reply: `Save failed: ${result.stderr.trim() || 'unknown error'}. Try again.` };
+  }
+
+  let parsed: { id: number };
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    return { reply: 'Save failed: invalid CLI output. Try again.' };
+  }
+
+  const preview = transcript.length > 50 ? transcript.slice(0, 50) + '...' : transcript;
+  return { reply: `#${parsed.id} saved (voice): ${preview}` };
 }
 
 // ── URL save ──────────────────────────────────────────────────────────

@@ -1,5 +1,78 @@
 import { describe, it, expect } from 'vitest';
-import { inferSourceType, extractFirstUrl, parseId } from './memobot-handler.js';
+import { inferSourceType, extractFirstUrl, parseId, detectAttachment, classifyFile } from './memobot-handler.js';
+
+describe('memobot-handler: detectAttachment', () => {
+  it('detects Photo received', () => {
+    const msg = `Photo received. File saved at: /tmp/123_photo.jpg\nCaption: "my screenshot"\nPlease analyze this image.`;
+    const a = detectAttachment(msg);
+    expect(a).toEqual({ kind: 'Photo', filePath: '/tmp/123_photo.jpg', caption: 'my screenshot' });
+  });
+
+  it('detects Photo without caption', () => {
+    const msg = `Photo received. File saved at: /tmp/456_photo.png\nPlease analyze this image.`;
+    const a = detectAttachment(msg);
+    expect(a).toEqual({ kind: 'Photo', filePath: '/tmp/456_photo.png', caption: undefined });
+  });
+
+  it('detects Document with filename', () => {
+    const msg = `Document received: Q4-report.pdf\nFile saved at: /tmp/789_report.pdf\nCaption: "earnings"\nPlease read and process this file.`;
+    const a = detectAttachment(msg);
+    expect(a).toEqual({ kind: 'Document', filename: 'Q4-report.pdf', filePath: '/tmp/789_report.pdf', caption: 'earnings' });
+  });
+
+  it('detects Video received', () => {
+    const msg = `Video received. File saved at: /tmp/vid_123.mp4\nCaption: "kefir brewing"\nUse the gemini-api-dev skill ...`;
+    const a = detectAttachment(msg);
+    expect(a).toEqual({ kind: 'Video', filePath: '/tmp/vid_123.mp4', caption: 'kefir brewing' });
+  });
+
+  it('returns null for plain text', () => {
+    expect(detectAttachment('just a note about things')).toBeNull();
+    expect(detectAttachment('https://example.com')).toBeNull();
+    expect(detectAttachment('')).toBeNull();
+  });
+
+  it('returns null when prefix is mid-string (not at start)', () => {
+    expect(detectAttachment('something then Photo received. File saved at: /x')).toBeNull();
+  });
+});
+
+describe('memobot-handler: classifyFile', () => {
+  it('classifies images as screenshot', () => {
+    expect(classifyFile('/tmp/foo.png').mediaType).toBe('image');
+    expect(classifyFile('/tmp/foo.png').sourceType).toBe('screenshot');
+    expect(classifyFile('/tmp/foo.jpg').mediaType).toBe('image');
+    expect(classifyFile('/tmp/foo.jpeg').mime).toBe('image/jpeg');
+    expect(classifyFile('/tmp/foo.heic').mime).toBe('image/heic');
+  });
+
+  it('classifies pdf', () => {
+    expect(classifyFile('/tmp/report.pdf').mediaType).toBe('pdf');
+    expect(classifyFile('/tmp/report.pdf').sourceType).toBe('file');
+    expect(classifyFile('/tmp/report.pdf').mime).toBe('application/pdf');
+  });
+
+  it('classifies video', () => {
+    expect(classifyFile('/tmp/clip.mp4').mediaType).toBe('video');
+    expect(classifyFile('/tmp/clip.mov').mime).toBe('video/quicktime');
+    expect(classifyFile('/tmp/clip.webm').mime).toBe('video/webm');
+  });
+
+  it('classifies audio', () => {
+    expect(classifyFile('/tmp/song.mp3').mediaType).toBe('audio');
+    expect(classifyFile('/tmp/voice.ogg').mediaType).toBe('audio');
+  });
+
+  it('falls back to other for unknown extensions', () => {
+    expect(classifyFile('/tmp/random.xyz').mediaType).toBe('other');
+    expect(classifyFile('/tmp/noext').mediaType).toBe('other');
+  });
+
+  it('is case-insensitive on extension', () => {
+    expect(classifyFile('/tmp/FOO.PNG').mediaType).toBe('image');
+    expect(classifyFile('/tmp/FOO.Pdf').mediaType).toBe('pdf');
+  });
+});
 
 describe('memobot-handler: parseId', () => {
   it('accepts plain numeric id', () => {
