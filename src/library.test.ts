@@ -358,14 +358,8 @@ describe('library cascade deletes', () => {
     const now = Math.floor(Date.now() / 1000);
 
     // Create two items so we can test that only the target's satellites are deleted
-    const itemA = (db.prepare(`
-      INSERT INTO library_items (source_type, captured_at, project, created_at)
-      VALUES ('tiktok', ?, 'pure_bliss', ?)
-    `).run(now, now).lastInsertRowid as number);
-    const itemB = (db.prepare(`
-      INSERT INTO library_items (source_type, captured_at, project, created_at)
-      VALUES ('reddit', ?, 'pure_bliss', ?)
-    `).run(now, now).lastInsertRowid as number);
+    const itemA = insertTestItem(db, { sourceType: 'tiktok', project: 'pure_bliss' });
+    const itemB = insertTestItem(db, { sourceType: 'reddit', project: 'pure_bliss' });
 
     // Satellite rows for item A
     db.prepare(`INSERT INTO item_media (item_id, media_type, storage, created_at) VALUES (?, 'image', 'local', ?)`).run(itemA, now);
@@ -395,10 +389,7 @@ describe('library cascade deletes', () => {
     const db = _getTestDb();
     const now = Math.floor(Date.now() / 1000);
 
-    const itemId = (db.prepare(`
-      INSERT INTO library_items (source_type, captured_at, project, created_at)
-      VALUES ('note', ?, 'general', ?)
-    `).run(now, now).lastInsertRowid as number);
+    const itemId = insertTestItem(db);
     db.prepare(`
       INSERT INTO item_content (item_id, content_type, text, created_at)
       VALUES (?, 'user_note', 'unique-searchterm-zebrafish', ?)
