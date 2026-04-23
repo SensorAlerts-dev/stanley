@@ -761,55 +761,59 @@ function runMigrations(database: Database.Database): void {
     .prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='item_content'`)
     .get() as { sql: string } | undefined;
   if (itemContentSchema && !itemContentSchema.sql.includes("'ai_summary'")) {
-    database.exec(`
-      PRAGMA foreign_keys = OFF;
-      BEGIN;
-      CREATE TABLE item_content_new (
-        id            INTEGER PRIMARY KEY AUTOINCREMENT,
-        item_id       INTEGER NOT NULL,
-        content_type  TEXT NOT NULL CHECK (content_type IN ('ocr','scraped_summary','transcript','user_note','ai_summary')),
-        text          TEXT NOT NULL,
-        source_agent  TEXT,
-        token_count   INTEGER,
-        created_at    INTEGER NOT NULL,
-        FOREIGN KEY (item_id) REFERENCES library_items(id) ON DELETE CASCADE
-      );
-      INSERT INTO item_content_new SELECT id, item_id, content_type, text, source_agent, token_count, created_at FROM item_content;
-      DROP TABLE item_content;
-      ALTER TABLE item_content_new RENAME TO item_content;
-      COMMIT;
-      PRAGMA foreign_keys = ON;
-    `);
-    logger.info('Migration: widened item_content.content_type enum to include ai_summary');
+    try {
+      database.exec(`
+        PRAGMA foreign_keys = OFF;
+        BEGIN;
+        CREATE TABLE item_content_new (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          item_id       INTEGER NOT NULL,
+          content_type  TEXT NOT NULL CHECK (content_type IN ('ocr','scraped_summary','transcript','user_note','ai_summary')),
+          text          TEXT NOT NULL,
+          source_agent  TEXT,
+          token_count   INTEGER,
+          created_at    INTEGER NOT NULL,
+          FOREIGN KEY (item_id) REFERENCES library_items(id) ON DELETE CASCADE
+        );
+        INSERT INTO item_content_new (id, item_id, content_type, text, source_agent, token_count, created_at)
+          SELECT id, item_id, content_type, text, source_agent, token_count, created_at FROM item_content;
+        DROP TABLE item_content;
+        ALTER TABLE item_content_new RENAME TO item_content;
+        COMMIT;
+      `);
+      logger.info('Migration: widened item_content.content_type enum to include ai_summary');
 
-    // Rebuild FTS triggers after table recreation. They reference item_content.
-    database.exec(`
-      DROP TRIGGER IF EXISTS item_content_fts_insert;
-      DROP TRIGGER IF EXISTS item_content_fts_update;
-      DROP TRIGGER IF EXISTS item_content_fts_delete;
-      CREATE TRIGGER item_content_fts_insert AFTER INSERT ON item_content BEGIN
-        INSERT INTO item_content_fts(rowid, text, item_id, content_type)
-          VALUES (new.id, new.text, new.item_id, new.content_type);
-      END;
-      CREATE TRIGGER item_content_fts_update AFTER UPDATE OF text ON item_content BEGIN
-        INSERT INTO item_content_fts(item_content_fts, rowid, text, item_id, content_type)
-          VALUES ('delete', old.id, old.text, old.item_id, old.content_type);
-        INSERT INTO item_content_fts(rowid, text, item_id, content_type)
-          VALUES (new.id, new.text, new.item_id, new.content_type);
-      END;
-      CREATE TRIGGER item_content_fts_delete AFTER DELETE ON item_content BEGIN
-        INSERT INTO item_content_fts(item_content_fts, rowid, text, item_id, content_type)
-          VALUES ('delete', old.id, old.text, old.item_id, old.content_type);
-      END;
-    `);
-    logger.info('Migration: rebuilt item_content_fts triggers after recreate');
+      // Rebuild FTS triggers after table recreation. They reference item_content.
+      database.exec(`
+        DROP TRIGGER IF EXISTS item_content_fts_insert;
+        DROP TRIGGER IF EXISTS item_content_fts_update;
+        DROP TRIGGER IF EXISTS item_content_fts_delete;
+        CREATE TRIGGER item_content_fts_insert AFTER INSERT ON item_content BEGIN
+          INSERT INTO item_content_fts(rowid, text, item_id, content_type)
+            VALUES (new.id, new.text, new.item_id, new.content_type);
+        END;
+        CREATE TRIGGER item_content_fts_update AFTER UPDATE OF text ON item_content BEGIN
+          INSERT INTO item_content_fts(item_content_fts, rowid, text, item_id, content_type)
+            VALUES ('delete', old.id, old.text, old.item_id, old.content_type);
+          INSERT INTO item_content_fts(rowid, text, item_id, content_type)
+            VALUES (new.id, new.text, new.item_id, new.content_type);
+        END;
+        CREATE TRIGGER item_content_fts_delete AFTER DELETE ON item_content BEGIN
+          INSERT INTO item_content_fts(item_content_fts, rowid, text, item_id, content_type)
+            VALUES ('delete', old.id, old.text, old.item_id, old.content_type);
+        END;
+      `);
+      logger.info('Migration: rebuilt item_content_fts triggers after recreate');
 
-    // Rebuild the FTS index (clear+repopulate) since rowids may have changed
-    database.exec(`
-      INSERT INTO item_content_fts(item_content_fts) VALUES ('delete-all');
-      INSERT INTO item_content_fts(rowid, text, item_id, content_type)
-        SELECT id, text, item_id, content_type FROM item_content;
-    `);
+      // Rebuild the FTS index (clear+repopulate) since rowids may have changed
+      database.exec(`
+        INSERT INTO item_content_fts(item_content_fts) VALUES ('delete-all');
+        INSERT INTO item_content_fts(rowid, text, item_id, content_type)
+          SELECT id, text, item_id, content_type FROM item_content;
+      `);
+    } finally {
+      database.exec(`PRAGMA foreign_keys = ON`);
+    }
   }
 
   // Live Meetings: add provider column so we can track which platform
@@ -842,6 +846,13 @@ export function _getTestDb(): Database.Database {
  * so tests can verify boot-time idempotency without destroying existing rows. */
 export function _reapplyTestSchema(): void {
   createSchema(db);
+}
+
+/** @internal - for tests only. Re-runs runMigrations on the active test DB
+ * so tests can exercise migration code paths that normally only fire on
+ * pre-existing (pre-migration) databases. */
+export function _rerunMigrations(): void {
+  runMigrations(db);
 }
 
 export function getSession(chatId: string, agentId = 'main'): string | undefined {

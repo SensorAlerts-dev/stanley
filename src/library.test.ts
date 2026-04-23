@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type Database from 'better-sqlite3';
-import { _initTestDatabase, _getTestDb, _reapplyTestSchema } from './db.js';
+import { _initTestDatabase, _getTestDb, _reapplyTestSchema, _rerunMigrations } from './db.js';
 
 // Raw schema introspection: fresh in-memory DB per test via _initTestDatabase(),
 // then query sqlite_master / PRAGMA to verify tables, indexes, and triggers exist.
@@ -1159,5 +1159,92 @@ describe('schema migration: ai_summary content_type', () => {
         VALUES (?, 'bogus', 'nope', ?)
       `).run(itemId, now);
     }).toThrow(/CHECK constraint failed/);
+  });
+});
+
+describe('schema migration: ai_summary content_type — migration path', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('migrates existing DB: preserves data, rebuilds FTS, new enum works', () => {
+    const db = _getTestDb();
+    const now = Math.floor(Date.now() / 1000);
+
+    // Roll the schema back to the NARROW CHECK to simulate a pre-migration DB.
+    db.exec(`
+      DROP TRIGGER IF EXISTS item_content_fts_insert;
+      DROP TRIGGER IF EXISTS item_content_fts_update;
+      DROP TRIGGER IF EXISTS item_content_fts_delete;
+      DROP TABLE item_content;
+      CREATE TABLE item_content (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        item_id       INTEGER NOT NULL,
+        content_type  TEXT NOT NULL CHECK (content_type IN ('ocr','scraped_summary','transcript','user_note')),
+        text          TEXT NOT NULL,
+        source_agent  TEXT,
+        token_count   INTEGER,
+        created_at    INTEGER NOT NULL,
+        FOREIGN KEY (item_id) REFERENCES library_items(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_item_content_item_id ON item_content(item_id);
+      CREATE TRIGGER item_content_fts_insert AFTER INSERT ON item_content BEGIN
+        INSERT INTO item_content_fts(rowid, text, item_id, content_type)
+          VALUES (new.id, new.text, new.item_id, new.content_type);
+      END;
+      CREATE TRIGGER item_content_fts_update AFTER UPDATE OF text ON item_content BEGIN
+        INSERT INTO item_content_fts(item_content_fts, rowid, text, item_id, content_type)
+          VALUES ('delete', old.id, old.text, old.item_id, old.content_type);
+        INSERT INTO item_content_fts(rowid, text, item_id, content_type)
+          VALUES (new.id, new.text, new.item_id, new.content_type);
+      END;
+      CREATE TRIGGER item_content_fts_delete AFTER DELETE ON item_content BEGIN
+        INSERT INTO item_content_fts(item_content_fts, rowid, text, item_id, content_type)
+          VALUES ('delete', old.id, old.text, old.item_id, old.content_type);
+      END;
+      -- Clear FTS since the table recreate above leaves it empty
+      INSERT INTO item_content_fts(item_content_fts) VALUES ('delete-all');
+    `);
+
+    // Seed a parent item and some content rows using the old narrow enum.
+    const itemId = (db.prepare(`
+      INSERT INTO library_items (source_type, captured_at, project, created_at)
+      VALUES ('note', ?, 'general', ?)
+    `).run(now, now).lastInsertRowid as number);
+
+    db.prepare(`INSERT INTO item_content (item_id, content_type, text, created_at) VALUES (?, 'user_note', 'original fermentation notes', ?)`).run(itemId, now);
+    db.prepare(`INSERT INTO item_content (item_id, content_type, text, created_at) VALUES (?, 'transcript', 'some transcribed speech', ?)`).run(itemId, now);
+
+    // Sanity: narrow CHECK still in effect — ai_summary insert must fail.
+    expect(() => {
+      db.prepare(`INSERT INTO item_content (item_id, content_type, text, created_at) VALUES (?, 'ai_summary', 'nope', ?)`).run(itemId, now);
+    }).toThrow(/CHECK constraint failed/);
+
+    // Run the migration.
+    _rerunMigrations();
+
+    // 1. Pre-migration rows survived.
+    const rows = db.prepare(`SELECT content_type, text FROM item_content WHERE item_id = ? ORDER BY id`).all(itemId) as Array<{ content_type: string; text: string }>;
+    expect(rows).toHaveLength(2);
+    expect(rows[0].text).toBe('original fermentation notes');
+    expect(rows[1].text).toBe('some transcribed speech');
+
+    // 2. ai_summary inserts succeed post-migration.
+    expect(() => {
+      db.prepare(`INSERT INTO item_content (item_id, content_type, text, created_at) VALUES (?, 'ai_summary', 'rebuilt works', ?)`).run(itemId, now);
+    }).not.toThrow();
+
+    // 3. FTS index finds pre-migration text.
+    const ftsHits = db.prepare(`SELECT rowid FROM item_content_fts WHERE item_content_fts MATCH 'fermentation'`).all() as Array<{ rowid: number }>;
+    expect(ftsHits.length).toBeGreaterThan(0);
+
+    // 4. UPDATE OF text fires the rebuilt update trigger.
+    const firstContentId = (db.prepare(`SELECT id FROM item_content WHERE item_id = ? ORDER BY id LIMIT 1`).get(itemId) as { id: number }).id;
+    db.prepare(`UPDATE item_content SET text = 'completely new text about kimchi' WHERE id = ?`).run(firstContentId);
+    const kimchiHits = db.prepare(`SELECT rowid FROM item_content_fts WHERE item_content_fts MATCH 'kimchi'`).all() as Array<{ rowid: number }>;
+    expect(kimchiHits.length).toBeGreaterThan(0);
+    const fermentationHits = db.prepare(`SELECT rowid FROM item_content_fts WHERE item_content_fts MATCH 'fermentation'`).all() as Array<{ rowid: number }>;
+    // The updated row's old 'fermentation' text should be gone; the other row didn't contain it.
+    expect(fermentationHits.length).toBe(0);
   });
 });
