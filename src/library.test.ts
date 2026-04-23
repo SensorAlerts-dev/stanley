@@ -430,7 +430,7 @@ describe('library url_hash uniqueness', () => {
         url: 'https://tiktok.com/2',
         urlHash: 'samehash',
       });
-    }).toThrow(/UNIQUE constraint failed/);
+    }).toThrow(/UNIQUE constraint failed: library_items\.url_hash/);
   });
 
   it('allows multiple items with NULL url_hash (notes, voice, screenshots)', () => {
