@@ -195,3 +195,58 @@ describe('library-cli save with --media-temp-path', () => {
     db.close();
   });
 });
+
+describe('library-cli find / open / recent', () => {
+  it('find returns JSON array of search results', () => {
+    const unique = 'uniquesearchterm' + Date.now();
+    runCli([
+      'save',
+      '--source-type', 'note',
+      '--user-note', `this is a test note containing ${unique}`,
+      '--content', `content_type=user_note,text=contains ${unique} for FTS`,
+    ]);
+
+    const { stdout, exitCode } = runCli(['find', unique, '--json']);
+    expect(exitCode).toBe(0);
+    const results = JSON.parse(stdout);
+    expect(Array.isArray(results)).toBe(true);
+    expect(results.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('find with --project filters results', () => {
+    const unique = 'projfilter' + Date.now();
+    runCli(['save', '--source-type', 'note', '--project', 'pure_bliss', '--content', `content_type=user_note,text=${unique}`]);
+    runCli(['save', '--source-type', 'note', '--project', 'general', '--content', `content_type=user_note,text=${unique}`]);
+
+    const { stdout } = runCli(['find', unique, '--project', 'pure_bliss', '--json']);
+    const results = JSON.parse(stdout);
+    for (const r of results) {
+      expect(r.project).toBe('pure_bliss');
+    }
+  });
+
+  it('open returns full item with satellites', () => {
+    const saveRes = JSON.parse(runCli(['save', '--source-type', 'note', '--user-note', 'open test']).stdout);
+    const { stdout, exitCode } = runCli(['open', String(saveRes.id), '--json']);
+    expect(exitCode).toBe(0);
+    const item = JSON.parse(stdout);
+    expect(item.id).toBe(saveRes.id);
+    expect(Array.isArray(item.media)).toBe(true);
+    expect(Array.isArray(item.content)).toBe(true);
+    expect(Array.isArray(item.tags)).toBe(true);
+  });
+
+  it('open on missing id exits non-zero', () => {
+    const { exitCode, stderr } = runCli(['open', '9999999']);
+    expect(exitCode).not.toBe(0);
+    expect(stderr.toLowerCase()).toContain('not found');
+  });
+
+  it('recent returns JSON array of most recent items', () => {
+    const { stdout, exitCode } = runCli(['recent', '--limit', '5', '--json']);
+    expect(exitCode).toBe(0);
+    const items = JSON.parse(stdout);
+    expect(Array.isArray(items)).toBe(true);
+    expect(items.length).toBeLessThanOrEqual(5);
+  });
+});

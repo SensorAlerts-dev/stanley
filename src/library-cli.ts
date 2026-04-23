@@ -226,6 +226,73 @@ async function run(): Promise<void> {
       break;
     }
 
+    case 'find': {
+      const query = rest[0];
+      if (!query || query.startsWith('--')) {
+        console.error('Error: find requires a query argument');
+        process.exit(1);
+      }
+      const flags = parseFlags(rest.slice(1));
+      const { searchLibrary } = await import('./library.js');
+      const results = searchLibrary({
+        query,
+        project: typeof flags.project === 'string' ? flags.project as Project : undefined,
+        limit: typeof flags.limit === 'string' ? parseInt(flags.limit, 10) : 10,
+      });
+      if (flags.json) {
+        console.log(JSON.stringify(results));
+      } else {
+        for (const r of results) {
+          console.log(`#${r.id} (${r.project}) ${r.source_type} - ${r.title ?? r.url ?? '(no title)'}`);
+          if (r.snippet) console.log(`  ${r.snippet}`);
+        }
+      }
+      break;
+    }
+
+    case 'open': {
+      const id = parseInt(rest[0], 10);
+      if (isNaN(id)) {
+        console.error('Error: open requires a numeric id');
+        process.exit(1);
+      }
+      const { getItem } = await import('./library.js');
+      const item = getItem(id);
+      if (!item) {
+        console.error(`Item ${id} not found`);
+        process.exit(1);
+      }
+      const flags = parseFlags(rest.slice(1));
+      if (flags.json) {
+        console.log(JSON.stringify(item));
+      } else {
+        console.log(`#${item.id} (${item.project})  captured ${new Date(item.captured_at * 1000).toISOString()}`);
+        console.log(`Source: ${item.source_type} ${item.author ?? ''}`);
+        if (item.title) console.log(`Title: ${item.title}`);
+        if (item.url) console.log(`URL: ${item.url}`);
+        if (item.user_note) console.log(`Note: ${item.user_note}`);
+        console.log(`Media: ${item.media.length}, Content: ${item.content.length}, Tags: ${item.tags.length}`);
+        console.log(`Reviewed: ${item.reviewed_at ? 'yes' : 'no'}  Pinned: ${item.pinned ? 'yes' : 'no'}`);
+      }
+      break;
+    }
+
+    case 'recent': {
+      const flags = parseFlags(rest);
+      const { searchLibrary } = await import('./library.js');
+      const items = searchLibrary({
+        limit: typeof flags.limit === 'string' ? parseInt(flags.limit, 10) : 10,
+      });
+      if (flags.json) {
+        console.log(JSON.stringify(items));
+      } else {
+        for (const r of items) {
+          console.log(`#${r.id} (${r.project}) ${r.source_type} - ${r.title ?? r.url ?? '(no title)'}`);
+        }
+      }
+      break;
+    }
+
     default:
       console.error(`Unknown subcommand: ${subcommand}`);
       usage();
