@@ -81,14 +81,14 @@ export type Project = 'pure_bliss' | 'octohive' | 'personal' | 'general';
 export const PURE_BLISS_KEYWORDS = [
   'kefir', 'water kefir', 'fermented', 'hydration', 'pure bliss',
   'probiotic', 'scoby', 'gut health',
-];
+] as const;
 
 export const OCTOHIVE_KEYWORDS = [
   'octopus', 'cephalopod', 'tentacle', 'aquarium', 'marine biology',
   'octohive',
-];
+] as const;
 
-export const PERSONAL_KEYWORDS: string[] = [
+export const PERSONAL_KEYWORDS: readonly string[] = [
   // Intentionally empty. Personal is never keyword-inferred -- it is only
   // assigned when the user types "for personal" in their message, or via
   // an explicit /project reassign.
@@ -96,12 +96,13 @@ export const PERSONAL_KEYWORDS: string[] = [
 
 export function inferProject(text: string, url?: string): Project {
   const haystack = `${text} ${url ?? ''}`.toLowerCase();
+  // Keywords are lowercased at author time; no need to re-lower per loop.
 
   for (const kw of OCTOHIVE_KEYWORDS) {
-    if (haystack.includes(kw.toLowerCase())) return 'octohive';
+    if (haystack.includes(kw)) return 'octohive';
   }
   for (const kw of PURE_BLISS_KEYWORDS) {
-    if (haystack.includes(kw.toLowerCase())) return 'pure_bliss';
+    if (haystack.includes(kw)) return 'pure_bliss';
   }
   return 'general';
 }
