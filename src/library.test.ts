@@ -9,6 +9,12 @@ function getTables(db: Database.Database): string[] {
     .map((r) => r.name);
 }
 
+function getIndexes(db: Database.Database, table: string): string[] {
+  return (db.prepare(
+    `SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=? ORDER BY name`,
+  ).all(table) as Array<{ name: string }>).map((r) => r.name);
+}
+
 describe('library schema', () => {
   beforeEach(() => {
     _initTestDatabase();
@@ -62,12 +68,6 @@ describe('library schema', () => {
   });
 
   describe('indexes', () => {
-    function getIndexes(db: Database.Database, table: string): string[] {
-      return (db.prepare(
-        `SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=? ORDER BY name`
-      ).all(table) as Array<{ name: string }>).map((r) => r.name);
-    }
-
     it('creates url_hash unique index on library_items', () => {
       const db = _getTestDb();
       expect(getIndexes(db, 'library_items')).toContain('idx_library_items_url_hash');
