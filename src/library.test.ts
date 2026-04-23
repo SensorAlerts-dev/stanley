@@ -535,6 +535,24 @@ describe('library.ts URL helpers', () => {
     expect(canonicalizeUrl('https://tiktok.com/@x/video/123?t=5s')).toBe('https://tiktok.com/@x/video/123');
   });
 
+  it('canonicalizeUrl preserves t= on non-tiktok hosts (youtube playback timestamp)', async () => {
+    const { canonicalizeUrl } = await import('./library.js');
+    expect(canonicalizeUrl('https://youtube.com/watch?v=abc&t=120'))
+      .toBe('https://youtube.com/watch?v=abc&t=120');
+  });
+
+  it('canonicalizeUrl preserves ref= on github.com (canonical branch selector)', async () => {
+    const { canonicalizeUrl } = await import('./library.js');
+    expect(canonicalizeUrl('https://github.com/user/repo/blob/main/file.ts?ref=main'))
+      .toBe('https://github.com/user/repo/blob/main/file.ts?ref=main');
+  });
+
+  it('canonicalizeUrl strips ref= on non-github hosts', async () => {
+    const { canonicalizeUrl } = await import('./library.js');
+    expect(canonicalizeUrl('https://example.com/article?ref=newsletter&id=1'))
+      .toBe('https://example.com/article?id=1');
+  });
+
   it('urlHash returns 40-char SHA1 hex', async () => {
     const { urlHash } = await import('./library.js');
     const h = urlHash('https://example.com/a');
