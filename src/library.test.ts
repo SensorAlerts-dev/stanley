@@ -1248,3 +1248,61 @@ describe('schema migration: ai_summary content_type — migration path', () => {
     expect(fermentationHits.length).toBe(0);
   });
 });
+
+describe('schema migration: mission_tasks.attempts column', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('mission_tasks has an attempts column defaulting to 0', () => {
+    const db = _getTestDb();
+    const cols = db.prepare(`PRAGMA table_info(mission_tasks)`).all() as Array<{ name: string; dflt_value: string | null }>;
+    const attempts = cols.find((c) => c.name === 'attempts');
+    expect(attempts).toBeDefined();
+    expect(attempts!.dflt_value).toBe('0');
+  });
+
+  it('increments attempts on UPDATE', () => {
+    const db = _getTestDb();
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(`
+      INSERT INTO mission_tasks (id, title, prompt, assigned_agent, status, created_by, priority, created_at)
+      VALUES ('t1', 'test', 'p', 'processor', 'queued', 'test', 0, ?)
+    `).run(now);
+
+    db.prepare(`UPDATE mission_tasks SET attempts = attempts + 1 WHERE id = 't1'`).run();
+    db.prepare(`UPDATE mission_tasks SET attempts = attempts + 1 WHERE id = 't1'`).run();
+
+    const row = db.prepare(`SELECT attempts FROM mission_tasks WHERE id = 't1'`).get() as { attempts: number };
+    expect(row.attempts).toBe(2);
+  });
+
+  it('migrates an existing DB without attempts column', () => {
+    const db = _getTestDb();
+    // Roll back: recreate mission_tasks without the attempts column
+    db.exec(`
+      DROP TABLE mission_tasks;
+      CREATE TABLE mission_tasks (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        assigned_agent TEXT,
+        status TEXT NOT NULL DEFAULT 'queued',
+        result TEXT,
+        error TEXT,
+        created_by TEXT NOT NULL DEFAULT 'dashboard',
+        priority INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        started_at INTEGER,
+        completed_at INTEGER
+      );
+    `);
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare(`INSERT INTO mission_tasks (id, title, prompt, assigned_agent, status, created_by, priority, created_at) VALUES ('m1', 't', 'p', 'processor', 'queued', 'test', 0, ?)`).run(now);
+
+    _rerunMigrations();
+
+    const row = db.prepare(`SELECT attempts FROM mission_tasks WHERE id = 'm1'`).get() as { attempts: number };
+    expect(row.attempts).toBe(0);
+  });
+});

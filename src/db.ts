@@ -226,6 +226,7 @@ function createSchema(database: Database.Database): void {
       error           TEXT,
       created_by      TEXT NOT NULL DEFAULT 'dashboard',
       priority        INTEGER NOT NULL DEFAULT 0,
+      attempts        INTEGER NOT NULL DEFAULT 0,
       created_at      INTEGER NOT NULL,
       started_at      INTEGER,
       completed_at    INTEGER
@@ -814,6 +815,13 @@ function runMigrations(database: Database.Database): void {
     } finally {
       database.exec(`PRAGMA foreign_keys = ON`);
     }
+  }
+
+  // Phase 3: add mission_tasks.attempts column for retry tracking.
+  const missionCols2 = database.prepare(`PRAGMA table_info(mission_tasks)`).all() as Array<{ name: string }>;
+  if (!missionCols2.some((c) => c.name === 'attempts')) {
+    database.exec(`ALTER TABLE mission_tasks ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0`);
+    logger.info('Migration: added attempts column to mission_tasks');
   }
 
   // Live Meetings: add provider column so we can track which platform
