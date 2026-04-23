@@ -222,6 +222,28 @@ async function run(): Promise<void> {
         });
       }
 
+      // Auto-log to hive_mind for cross-agent visibility. Only on new saves
+      // (not duplicates). Opt out via --no-hive-mind for agents that write
+      // their own hive_mind entries or shouldn't appear in the activity feed.
+      if (!result.is_duplicate && !flags['no-hive-mind']) {
+        const { _getTestDb } = await import('./library.js');
+        const db = _getTestDb();
+        const agentId = process.env.CLAUDECLAW_AGENT_ID || 'memobot';
+        const project = (typeof flags.project === 'string' ? flags.project : 'general');
+        const titleOrNote = (
+          (typeof flags.title === 'string' && flags.title) ||
+          (typeof flags['user-note'] === 'string' && flags['user-note']) ||
+          (typeof flags.url === 'string' && flags.url) ||
+          sourceType
+        ).toString().slice(0, 60);
+        const summary = `saved #${result.id} (${project}) ${titleOrNote}`;
+        const now = Math.floor(Date.now() / 1000);
+        db.prepare(`
+          INSERT INTO hive_mind (agent_id, chat_id, action, summary, artifacts, created_at)
+          VALUES (?, '', 'save', ?, NULL, ?)
+        `).run(agentId, summary, now);
+      }
+
       console.log(JSON.stringify(result));
       break;
     }

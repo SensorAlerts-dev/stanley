@@ -302,3 +302,43 @@ describe('library-cli delete / update', () => {
     expect(opened.user_note).toBe('original\n---\nappended text');
   });
 });
+
+describe('library-cli save auto-logs hive_mind', () => {
+  it('writes a hive_mind row on new save with CLAUDECLAW_AGENT_ID attribution', async () => {
+    // Invoke CLI with CLAUDECLAW_AGENT_ID set in env
+    const uniqueNote = 'hive-mind-test-' + Date.now();
+    const result = execFileSync('node', [CLI, 'save', '--source-type', 'note', '--user-note', uniqueNote], {
+      encoding: 'utf-8',
+      env: { ...process.env, CLAUDECLAW_AGENT_ID: 'memobot' },
+    });
+    const saved = JSON.parse(result);
+
+    const Database = (await import('better-sqlite3')).default;
+    const db = new Database(path.join(PROJECT_ROOT, 'store', 'claudeclaw.db'), { readonly: true });
+    const rows = db.prepare(
+      `SELECT agent_id, action, summary FROM hive_mind WHERE summary LIKE ? ORDER BY id DESC LIMIT 1`,
+    ).all('%#' + saved.id + '%') as Array<{ agent_id: string; action: string; summary: string }>;
+    expect(rows.length).toBe(1);
+    expect(rows[0].agent_id).toBe('memobot');
+    expect(rows[0].action).toBe('save');
+    expect(rows[0].summary).toContain(`#${saved.id}`);
+    db.close();
+  });
+
+  it('does NOT write a hive_mind row when --no-hive-mind is passed', async () => {
+    const uniqueNote = 'no-hive-test-' + Date.now();
+    const result = execFileSync('node', [CLI, 'save', '--source-type', 'note', '--user-note', uniqueNote, '--no-hive-mind'], {
+      encoding: 'utf-8',
+      env: { ...process.env, CLAUDECLAW_AGENT_ID: 'memobot' },
+    });
+    const saved = JSON.parse(result);
+
+    const Database = (await import('better-sqlite3')).default;
+    const db = new Database(path.join(PROJECT_ROOT, 'store', 'claudeclaw.db'), { readonly: true });
+    const rows = db.prepare(
+      `SELECT COUNT(*) AS n FROM hive_mind WHERE summary LIKE ?`,
+    ).get('%#' + saved.id + '%') as { n: number };
+    expect(rows.n).toBe(0);
+    db.close();
+  });
+});
