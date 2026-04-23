@@ -62,6 +62,13 @@ function runCli(args: string[]): Promise<{ stdout: string; stderr: string; exitC
   });
 }
 
+// ── Id parsing (accepts "22" or "#22") ────────────────────────────────
+
+export function parseId(raw: string): string | null {
+  const cleaned = raw.trim().replace(/^#/, '');
+  return /^\d+$/.test(cleaned) ? cleaned : null;
+}
+
 // ── URL detection ─────────────────────────────────────────────────────
 
 const URL_REGEX = /https?:\/\/[^\s<>"']+/i;
@@ -194,25 +201,33 @@ async function handleSlashCommand(command: string): Promise<HandlerResult | null
     }
 
     case '/open': {
-      if (rest.length === 0) return { reply: 'Usage: /open <id>' };
-      const id = rest[0];
-      if (!/^\d+$/.test(id)) return { reply: 'Usage: /open <id> (numeric id)' };
+      if (rest.length === 0) return { reply: 'Usage: /open <id> (accepts #<id> too)' };
+      const id = parseId(rest[0]);
+      if (!id) return { reply: 'Usage: /open <id> (numeric id)' };
       const result = await runCli(['open', id]);
-      if (result.exitCode !== 0) return { reply: result.stderr.trim() || `Item ${id} not found.` };
+      if (result.exitCode !== 0) return { reply: result.stderr.trim() || `#${id} not found.` };
       return { reply: result.stdout.trim() };
     }
 
     case '/delete': {
-      if (rest.length === 0) return { reply: 'Usage: /delete <id> yes' };
-      const id = rest[0];
-      if (!/^\d+$/.test(id)) return { reply: 'Usage: /delete <id> yes (numeric id)' };
-      const confirm = (rest[1] ?? '').toLowerCase();
-      if (confirm !== 'yes') {
-        return { reply: `Confirm with: /delete ${id} yes` };
+      if (rest.length === 0) return { reply: 'Usage: /delete <id> (accepts #<id> too)' };
+      const id = parseId(rest[0]);
+      if (!id) return { reply: 'Usage: /delete <id> (numeric id)' };
+
+      // Grab a preview BEFORE deleting so the reply tells the user what went.
+      const peek = await runCli(['open', id, '--json']);
+      let previewLine = '';
+      if (peek.exitCode === 0) {
+        try {
+          const item = JSON.parse(peek.stdout) as { user_note?: string | null; url?: string | null; title?: string | null };
+          const snippet = item.user_note?.trim() || item.url || item.title || '';
+          if (snippet) previewLine = ` (${snippet.length > 50 ? snippet.slice(0, 50) + '...' : snippet})`;
+        } catch { /* ignore parse errors */ }
       }
+
       const result = await runCli(['delete', id]);
       if (result.exitCode !== 0) return { reply: result.stderr.trim() || `Delete failed for #${id}.` };
-      return { reply: `#${id} deleted.` };
+      return { reply: `#${id} deleted.${previewLine}` };
     }
 
     default:
@@ -228,8 +243,8 @@ function memobotHelpText(): string {
     '  Type any text        -> save as a note',
     '  /recent [N]          -> last N saves (default 10)',
     '  /find <query>        -> full-text search',
-    '  /open <id>           -> show one item',
-    '  /delete <id> yes     -> delete an item',
+    '  /open <id>           -> show one item (accepts #id)',
+    '  /delete <id>         -> delete an item (accepts #id)',
     '  /help                -> this help',
   ].join('\n');
 }

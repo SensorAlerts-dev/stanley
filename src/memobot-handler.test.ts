@@ -1,5 +1,31 @@
 import { describe, it, expect } from 'vitest';
-import { inferSourceType, extractFirstUrl } from './memobot-handler.js';
+import { inferSourceType, extractFirstUrl, parseId } from './memobot-handler.js';
+
+describe('memobot-handler: parseId', () => {
+  it('accepts plain numeric id', () => {
+    expect(parseId('22')).toBe('22');
+    expect(parseId('1')).toBe('1');
+    expect(parseId('999')).toBe('999');
+  });
+
+  it('strips leading #', () => {
+    expect(parseId('#22')).toBe('22');
+    expect(parseId('#1')).toBe('1');
+  });
+
+  it('trims whitespace', () => {
+    expect(parseId('  22  ')).toBe('22');
+    expect(parseId(' #22 ')).toBe('22');
+  });
+
+  it('returns null for non-numeric', () => {
+    expect(parseId('abc')).toBeNull();
+    expect(parseId('22abc')).toBeNull();
+    expect(parseId('')).toBeNull();
+    expect(parseId('#')).toBeNull();
+    expect(parseId('##22')).toBeNull();
+  });
+});
 
 describe('memobot-handler: inferSourceType', () => {
   it('recognises tiktok', () => {
