@@ -234,8 +234,50 @@ function memobotHelpText(): string {
   ].join('\n');
 }
 
+// Generic og:titles that carry no information and should be ignored in /recent.
+const USELESS_TITLES = new Set([
+  'tiktok - make your day',
+  'instagram',
+  'facebook',
+  'youtube',
+  'x',
+  'twitter',
+  'reddit',
+  'threads',
+  'linkedin',
+]);
+
+function isUsefulTitle(title: string | null): title is string {
+  if (!title) return false;
+  return !USELESS_TITLES.has(title.trim().toLowerCase());
+}
+
+function formatRelativeTime(unixTs: number): string {
+  const seconds = Math.floor(Date.now() / 1000) - unixTs;
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 4) return `${weeks}w ago`;
+  const months = Math.floor(days / 30);
+  return `${months}mo ago`;
+}
+
 function formatItemList(stdout: string, emptyText: string): string {
-  let items: Array<{ id: number; source_type: string; project: string; title: string | null; url: string | null; snippet?: string }>;
+  let items: Array<{
+    id: number;
+    source_type: string;
+    project: string;
+    title: string | null;
+    url: string | null;
+    user_note: string | null;
+    captured_at: number;
+    snippet?: string;
+  }>;
   try {
     items = JSON.parse(stdout);
   } catch {
@@ -244,11 +286,27 @@ function formatItemList(stdout: string, emptyText: string): string {
   if (!Array.isArray(items) || items.length === 0) return emptyText;
 
   return items
-    .map((r, i) => {
-      const label = r.title ?? r.url ?? '(no title)';
-      const body = `${i + 1}. #${r.id} (${r.project}) ${r.source_type} - ${label}`;
+    .map((r) => {
+      const time = formatRelativeTime(r.captured_at);
+      const projectTag = r.project !== 'general' ? ` [${r.project}]` : '';
+
+      // Priority for the descriptive label:
+      // 1. Useful title (scraped og:title that isn't platform-generic)
+      // 2. User note (what the user typed — always informative)
+      // 3. URL (clickable in Telegram)
+      // 4. Fallback
+      const note = r.user_note?.trim();
+      const label = isUsefulTitle(r.title)
+        ? r.title!
+        : note && note.length > 0
+          ? note.length > 80 ? note.slice(0, 80) + '...' : note
+          : r.url ?? '(no content)';
+
+      // Show URL as a separate line when we have one but used something else as label
+      const urlLine = r.url && label !== r.url ? `\n   ${r.url}` : '';
       const snippet = r.snippet ? `\n   ${r.snippet}` : '';
-      return body + snippet;
+
+      return `#${r.id} · ${time}${projectTag} · ${r.source_type}\n  ${label}${urlLine}${snippet}`;
     })
-    .join('\n');
+    .join('\n\n');
 }

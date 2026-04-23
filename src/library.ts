@@ -511,6 +511,7 @@ export interface ItemSearchRow {
   source_type: string;
   url: string | null;
   title: string | null;
+  user_note: string | null;
   project: string;
   captured_at: number;
   snippet?: string;
@@ -531,7 +532,7 @@ export function searchLibrary(opts: SearchOpts): ItemSearchRow[] {
     if (opts.since) { filters.push(`li.captured_at >= ?`); params.push(opts.since); }
 
     const sql = `
-      SELECT DISTINCT li.id, li.source_type, li.url, li.title, li.project, li.captured_at,
+      SELECT DISTINCT li.id, li.source_type, li.url, li.title, li.user_note, li.project, li.captured_at,
         snippet(item_content_fts, 0, '<', '>', '...', 20) AS snippet
       FROM item_content_fts
       JOIN library_items li ON li.id = item_content_fts.item_id
@@ -552,7 +553,7 @@ export function searchLibrary(opts: SearchOpts): ItemSearchRow[] {
   if (opts.since) { filters.push(`captured_at >= ?`); params.push(opts.since); }
 
   return db.prepare(`
-    SELECT id, source_type, url, title, project, captured_at
+    SELECT id, source_type, url, title, user_note, project, captured_at
     FROM library_items
     WHERE ${filters.join(' AND ')}
     ORDER BY captured_at DESC
