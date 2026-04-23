@@ -120,7 +120,7 @@ export const CLAUDECLAW_CONFIG = expandHome(rawConfigDir);
 
 // ── Research library ────────────────────────────────────────────────
 // Root directory for the research library's files (screenshots, PDFs,
-// videos, audio). Defaults to the always-mounted flash drive on remy.
+// videos, audio). Defaults to the expected flash drive mount path.
 // Files in item_media.file_path are stored **relative** to this path.
 
 const rawLibraryRoot =
@@ -131,6 +131,7 @@ const rawLibraryRoot =
 /**
  * Absolute path to the research library's file root.
  * Defaults to /Volumes/ClaudeClaw/claudeclaw-library.
+ * Set LIBRARY_ROOT in .env or environment to override.
  */
 export const LIBRARY_ROOT = expandHome(rawLibraryRoot);
 
