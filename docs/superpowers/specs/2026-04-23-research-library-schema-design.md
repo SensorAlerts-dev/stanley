@@ -56,8 +56,9 @@ The primary user goal is **"help me get back to it."** Every item keeps a clicka
     │  (Phase 2)  │   (Phase 3)   │  (Phase 4)  │  (Phase 5)  │
     └─────────────┴───────────────┴─────────────┴─────────────┘
 
-                  Google Drive: ClaudeClaw Library/
+                  Flash drive: /Volumes/ClaudeClaw/claudeclaw-library/
                     pure_bliss/  octohive/  personal/  general/
+                  (Google Drive mirror optional, per-item.)
 ```
 
 Inter-agent coordination reuses **existing** infrastructure:
@@ -65,6 +66,8 @@ Inter-agent coordination reuses **existing** infrastructure:
 - `hive_mind` table for cross-agent activity feed.
 - `src/scheduler.ts` + `schedule-cli.ts` for periodic sweeps as a fallback when a handoff is missed.
 - `src/embeddings.ts` reused by the Relationship agent.
+
+Files live on an external SSD (`/Volumes/ClaudeClaw`) that stays mounted on remy. The existing Cloudflare tunnel exposes the dashboard for phone access, so flash-drive-only storage does not cost off-network accessibility.
 
 ## 4. Data Model
 
@@ -124,20 +127,23 @@ URL canonicalization rules (implemented by the Collector in Phase 2, spec only m
 
 ### 4.2 `item_media` — file attachments
 
-One item can have multiple media (e.g. a reddit post with 3 screenshots).
+One item can have multiple media (e.g. a reddit post with 3 screenshots). Flash drive is the primary store; Google Drive is optional per-item cloud mirror.
 
 | Column | Type | Notes |
 |---|---|---|
 | `id` | INTEGER PK | |
 | `item_id` | INTEGER NOT NULL | FK → library_items.id ON DELETE CASCADE |
 | `media_type` | TEXT NOT NULL | `image` \| `video` \| `pdf` \| `audio` \| `other` |
-| `local_cache_path` | TEXT | nullable; path on disk if cached locally |
-| `drive_file_id` | TEXT | Google Drive file ID |
-| `drive_url` | TEXT | clickable link for the dashboard |
+| `file_path` | TEXT | path relative to `$LIBRARY_ROOT` (e.g. `pure_bliss/screenshots/20260423-1512_42_kefir.png`). Required for local-stored items. |
+| `storage` | TEXT NOT NULL | `local` \| `drive` \| `both` (describes where the file actually lives) |
+| `drive_file_id` | TEXT | nullable; Google Drive file ID when `storage` includes `drive` |
+| `drive_url` | TEXT | nullable; clickable Drive link |
 | `mime_type` | TEXT | |
 | `bytes` | INTEGER | |
 | `ocr_text` | TEXT | nullable; Processor populates per-media |
 | `created_at` | INTEGER | |
+
+`file_path` is stored **relative** to `$LIBRARY_ROOT` so the library is portable (rename or remount the drive without rewriting rows). The dashboard and any file-serving code resolves to an absolute path at runtime.
 
 ### 4.3 `item_content` — searchable text
 
@@ -223,12 +229,19 @@ CREATE INDEX idx_item_relationships_target        ON item_relationships(target_i
 
 Partial indexes on the NULL lifecycle columns keep the agent sweep queries fast as the table grows.
 
-## 5. Google Drive Storage Layout
+## 5. Flash Drive Storage Layout
 
-The Collector agent uploads any files, screenshots, or captured videos into a shared Drive folder that the user can open manually.
+The Collector agent writes any files, screenshots, or captured videos to a dedicated library root on the attached SSD. Always-on + already-mounted means files are immediately readable by every other agent and by the dashboard.
+
+**Library root env var (required, read from `.env`):**
+```
+LIBRARY_ROOT=/Volumes/ClaudeClaw/claudeclaw-library
+```
+
+**Physical layout (exists on disk as of 2026-04-23):**
 
 ```
-ClaudeClaw Library/
+/Volumes/ClaudeClaw/claudeclaw-library/
 ├── pure_bliss/
 │   ├── screenshots/
 │   ├── pdfs/
@@ -236,21 +249,31 @@ ClaudeClaw Library/
 │   ├── audio/
 │   └── other/
 ├── octohive/
-│   └── ...
+│   └── (same 5 buckets)
 ├── personal/
-│   └── ...
+│   └── (same 5 buckets)
 └── general/
-    └── ...
+    └── (same 5 buckets)
 ```
 
-Mapping rules:
+Mapping rules the Collector enforces:
 - The item's `project` column determines the top-level folder.
 - The `media_type` determines the subfolder.
-- Filenames follow `YYYYMMDD-HHMM_<item_id>_<original-name>` so they sort chronologically and remain traceable to a DB row.
+- Filenames follow `YYYYMMDD-HHMM_<item_id>_<slug>.<ext>` so they sort chronologically and remain traceable to a DB row.
+- `item_media.file_path` stores the path **relative** to `$LIBRARY_ROOT`, never absolute, so moving or renaming the drive only requires updating the env var.
 
-The `drive_file_id` and `drive_url` stored in `item_media` are the source of truth for retrieval. The local cache path (if any) is convenience only and can be pruned.
+**Phone access:** the existing Cloudflare tunnel already installed on remy exposes the dashboard publicly (token-authenticated). The dashboard's future Library panel serves previews and originals directly from `$LIBRARY_ROOT`, so there is no off-device accessibility loss from skipping Google Drive.
 
-OAuth + Drive client wiring reuses the existing Google Drive MCP authentication already available in the ClaudeClaw environment.
+**Google Drive is an optional per-item mirror.** Use cases:
+- Sharing a PDF with someone outside ClaudeClaw.
+- Belt-and-suspenders backup for a specific high-value item.
+
+When `item_media.storage = 'drive'` or `'both'`, the Collector (Phase 2) uploads via the existing Google Drive MCP auth and records `drive_file_id` + `drive_url`. Google Drive is **never** the primary store.
+
+**Drive availability handling:** if `$LIBRARY_ROOT` is unreachable (drive unmounted, reboot in progress), the Collector:
+- Returns an error on ingest attempts that require file writes.
+- Writes a `hive_mind` warning so the dashboard surfaces "flash drive offline."
+- Queues the Telegram message for retry once the drive comes back (via `mission_tasks`).
 
 ## 6. Lifecycle Model
 
@@ -307,14 +330,18 @@ Phase 1 is done when:
 - [ ] All indexes in §4.7 exist.
 - [ ] A round-trip test inserts a `library_items` row, attaches `item_media` + `item_content`, writes tags, writes a relationship to a second item, writes an embedding blob, and round-trips every field without loss.
 - [ ] FTS5 triggers verified: inserting into `item_content` makes the row searchable via `item_content_fts`; updates and deletes propagate.
-- [ ] Drive folder layout documented and any OAuth scopes needed are surfaced (even though Collector isn't implemented yet).
+- [ ] Flash drive folder structure exists at `$LIBRARY_ROOT` and is documented (already created on `/Volumes/ClaudeClaw/claudeclaw-library`).
+- [ ] `.env.example` updated with `LIBRARY_ROOT=/Volumes/ClaudeClaw/claudeclaw-library`.
+- [ ] Optional Google Drive mirror requirements (OAuth scopes) noted for Phase 2.
 - [ ] `docs/` includes a short reference of every table's purpose linked from the main README.
 
 ## 10. Assumptions & Open Questions
 
 **Assumptions locked in:**
-- Google Drive is the file store (OAuth already set up in ClaudeClaw).
-- SQLite on disk, shared DB file.
+- Flash drive (`/Volumes/ClaudeClaw/claudeclaw-library`) is the primary file store. Always-on, 1.8 TB capacity.
+- Google Drive is an optional per-item mirror only, never the primary store.
+- Dashboard accessible off-network via existing Cloudflare tunnel + token auth.
+- SQLite on disk, shared DB file (`store/claudeclaw.db`).
 - Embeddings model reused from `src/embeddings.ts` defaults.
 - Multi-user / multi-chat support is out of scope; `chat_id` captured for future use but no isolation logic.
 
