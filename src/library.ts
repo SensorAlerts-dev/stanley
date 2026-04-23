@@ -514,6 +514,7 @@ export interface ItemSearchRow {
   user_note: string | null;
   project: string;
   captured_at: number;
+  media_filename: string | null;  // basename of first attached media, if any
   snippet?: string;
 }
 
@@ -533,6 +534,7 @@ export function searchLibrary(opts: SearchOpts): ItemSearchRow[] {
 
     const sql = `
       SELECT DISTINCT li.id, li.source_type, li.url, li.title, li.user_note, li.project, li.captured_at,
+        (SELECT file_path FROM item_media WHERE item_id = li.id ORDER BY id LIMIT 1) AS media_filename,
         snippet(item_content_fts, 0, '<', '>', '...', 20) AS snippet
       FROM item_content_fts
       JOIN library_items li ON li.id = item_content_fts.item_id
@@ -553,7 +555,8 @@ export function searchLibrary(opts: SearchOpts): ItemSearchRow[] {
   if (opts.since) { filters.push(`captured_at >= ?`); params.push(opts.since); }
 
   return db.prepare(`
-    SELECT id, source_type, url, title, user_note, project, captured_at
+    SELECT id, source_type, url, title, user_note, project, captured_at,
+      (SELECT file_path FROM item_media WHERE item_id = library_items.id ORDER BY id LIMIT 1) AS media_filename
     FROM library_items
     WHERE ${filters.join(' AND ')}
     ORDER BY captured_at DESC

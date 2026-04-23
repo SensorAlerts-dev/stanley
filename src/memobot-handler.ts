@@ -448,6 +448,7 @@ function formatItemList(stdout: string, emptyText: string): string {
     url: string | null;
     user_note: string | null;
     captured_at: number;
+    media_filename: string | null;
     snippet?: string;
   }>;
   try {
@@ -464,17 +465,26 @@ function formatItemList(stdout: string, emptyText: string): string {
 
       // Priority for the descriptive label:
       // 1. Useful title (scraped og:title that isn't platform-generic)
-      // 2. User note (what the user typed — always informative)
+      // 2. User note (what the user typed)
       // 3. URL (clickable in Telegram)
-      // 4. Fallback
+      // 4. Media filename (screenshots/videos/files without captions)
+      // 5. Fallback
       const note = r.user_note?.trim();
-      const label = isUsefulTitle(r.title)
-        ? r.title!
-        : note && note.length > 0
-          ? note.length > 80 ? note.slice(0, 80) + '...' : note
-          : r.url ?? '(no content)';
+      const filename = r.media_filename ? r.media_filename.split('/').pop() : null;
 
-      // Show URL as a separate line when we have one but used something else as label
+      let label: string;
+      if (isUsefulTitle(r.title)) {
+        label = r.title!;
+      } else if (note && note.length > 0) {
+        label = note.length > 80 ? note.slice(0, 80) + '...' : note;
+      } else if (r.url) {
+        label = r.url;
+      } else if (filename) {
+        label = filename;
+      } else {
+        label = '(no content)';
+      }
+
       const urlLine = r.url && label !== r.url ? `\n   ${r.url}` : '';
       const snippet = r.snippet ? `\n   ${r.snippet}` : '';
 
