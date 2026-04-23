@@ -60,4 +60,54 @@ describe('library schema', () => {
       }
     });
   });
+
+  describe('indexes', () => {
+    function getIndexes(db: Database.Database, table: string): string[] {
+      return (db.prepare(
+        `SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=? ORDER BY name`
+      ).all(table) as Array<{ name: string }>).map((r) => r.name);
+    }
+
+    it('creates url_hash unique index on library_items', () => {
+      const db = _getTestDb();
+      expect(getIndexes(db, 'library_items')).toContain('idx_library_items_url_hash');
+    });
+
+    it('creates project index on library_items', () => {
+      const db = _getTestDb();
+      expect(getIndexes(db, 'library_items')).toContain('idx_library_items_project');
+    });
+
+    it('creates source_type index on library_items', () => {
+      const db = _getTestDb();
+      expect(getIndexes(db, 'library_items')).toContain('idx_library_items_source_type');
+    });
+
+    it('creates captured_at index on library_items', () => {
+      const db = _getTestDb();
+      expect(getIndexes(db, 'library_items')).toContain('idx_library_items_captured_at');
+    });
+
+    it('creates reviewed_at index on library_items', () => {
+      const db = _getTestDb();
+      expect(getIndexes(db, 'library_items')).toContain('idx_library_items_reviewed_at');
+    });
+
+    it('creates partial indexes for NULL lifecycle stages', () => {
+      const db = _getTestDb();
+      const idx = getIndexes(db, 'library_items');
+      expect(idx).toContain('idx_library_items_enriched_null');
+      expect(idx).toContain('idx_library_items_related_null');
+      expect(idx).toContain('idx_library_items_analyzed_null');
+    });
+
+    it('creates FK indexes on satellite tables', () => {
+      const db = _getTestDb();
+      expect(getIndexes(db, 'item_media')).toContain('idx_item_media_item_id');
+      expect(getIndexes(db, 'item_content')).toContain('idx_item_content_item_id');
+      expect(getIndexes(db, 'item_tags')).toContain('idx_item_tags_tag');
+      expect(getIndexes(db, 'item_relationships')).toContain('idx_item_relationships_source');
+      expect(getIndexes(db, 'item_relationships')).toContain('idx_item_relationships_target');
+    });
+  });
 });

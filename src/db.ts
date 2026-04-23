@@ -448,6 +448,29 @@ function createSchema(database: Database.Database): void {
       created_at         INTEGER NOT NULL,
       FOREIGN KEY (item_id) REFERENCES library_items(id) ON DELETE CASCADE
     );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_library_items_url_hash
+      ON library_items(url_hash) WHERE url_hash IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_library_items_project
+      ON library_items(project);
+    CREATE INDEX IF NOT EXISTS idx_library_items_source_type
+      ON library_items(source_type);
+    CREATE INDEX IF NOT EXISTS idx_library_items_captured_at
+      ON library_items(captured_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_library_items_reviewed_at
+      ON library_items(reviewed_at);
+    CREATE INDEX IF NOT EXISTS idx_library_items_enriched_null
+      ON library_items(id) WHERE enriched_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_library_items_related_null
+      ON library_items(id) WHERE related_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_library_items_analyzed_null
+      ON library_items(id) WHERE analyzed_at IS NULL;
+
+    CREATE INDEX IF NOT EXISTS idx_item_media_item_id       ON item_media(item_id);
+    CREATE INDEX IF NOT EXISTS idx_item_content_item_id     ON item_content(item_id);
+    CREATE INDEX IF NOT EXISTS idx_item_tags_tag            ON item_tags(tag, tag_type);
+    CREATE INDEX IF NOT EXISTS idx_item_relationships_source ON item_relationships(source_item_id);
+    CREATE INDEX IF NOT EXISTS idx_item_relationships_target ON item_relationships(target_item_id);
   `);
 }
 
