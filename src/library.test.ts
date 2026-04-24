@@ -1122,6 +1122,27 @@ describe('library.ts fetchOgMeta', () => {
 
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }, 15000);
+
+  it('resolves (does not hang) when the response exceeds the 512 KB cap', async () => {
+    const { fetchOgMeta } = await import('./library.js');
+    const http = await import('http');
+    // 1 MB body — twice the cap. og: tags placed in the first 1 KB so
+    // partial extraction should still work after the stream is destroyed.
+    const head = `<html><head><meta property="og:title" content="Big Page Title"></head><body>`;
+    const padding = 'x'.repeat(1024 * 1024);
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      res.end(head + padding);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as { port: number }).port;
+
+    const meta = await fetchOgMeta(`http://127.0.0.1:${port}/big`);
+    expect(meta).not.toBeNull();
+    expect(meta!.title).toBe('Big Page Title');
+
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }, 15000);
 });
 
 describe('schema migration: ai_summary content_type', () => {

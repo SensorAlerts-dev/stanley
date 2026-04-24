@@ -198,20 +198,33 @@ export async function fetchOgMeta(url: string, timeoutMs = 10000): Promise<OgMet
         }
 
         let bytes = 0;
+        let settled = false;
         const chunks: Buffer[] = [];
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          resolve(extractOgMeta(Buffer.concat(chunks).toString('utf8'), u));
+        };
         res.on('data', (chunk: Buffer) => {
+          if (settled) return;
           bytes += chunk.length;
-          if (bytes > maxBytes) {
-            res.destroy();
-            return;
-          }
           chunks.push(chunk);
+          // og: tags live in <head> — the first 512 KB is plenty. When the
+          // page is larger (e.g. youtube.com/shorts/* is ~1 MB), destroy
+          // the stream and resolve with what we have. 'end' won't fire
+          // after destroy, only 'close', which is handled below.
+          if (bytes >= maxBytes) {
+            res.destroy();
+            finish();
+          }
         });
-        res.on('end', () => {
-          const html = Buffer.concat(chunks).toString('utf8');
-          resolve(extractOgMeta(html, u));
+        res.on('end', finish);
+        res.on('close', finish);
+        res.on('error', () => {
+          if (settled) return;
+          settled = true;
+          resolve(null);
         });
-        res.on('error', () => resolve(null));
       });
 
       req.setTimeout(timeoutMs, () => {
