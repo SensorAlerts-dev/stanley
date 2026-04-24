@@ -6,10 +6,14 @@
  *   node dist/processor-cli.js sweep   (every 1 hour)
  */
 
+import { logger } from './logger.js';
+// stdout is reserved for the JSON result; silence logger emissions so
+// migration INFO logs don't interleave with the result JSON that the
+// scheduler will parse.
+logger.level = 'silent';
+
 import { initDatabase } from './db.js';
 import { drainQueue, sweepStale } from './processor.js';
-
-initDatabase();
 
 const [, , command] = process.argv;
 
@@ -25,6 +29,8 @@ async function main(): Promise<void> {
     usage();
     process.exit(command ? 0 : 1);
   }
+
+  initDatabase();
 
   switch (command) {
     case 'drain': {

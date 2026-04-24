@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execFileSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
@@ -30,18 +30,29 @@ describe('processor-cli', () => {
     if (!fs.existsSync(CLI)) {
       execFileSync('npm', ['run', 'build'], { cwd: PROJECT_ROOT, stdio: 'inherit' });
     }
-    // Prime the DB so migration INFO logs (which pino writes to stdout) are
-    // flushed before any test parses JSON from stdout. Without this, the first
-    // CLI call in a fresh CLAUDECLAW_STORE_DIR would emit migration logs
-    // mixed with JSON, breaking JSON.parse.
-    runCli(['drain']);
-  }, 120000);
+  }, 60000);
 
-  it('drain with no queued tasks reports 0 processed', () => {
-    const { stdout, exitCode } = runCli(['drain']);
-    expect(exitCode).toBe(0);
-    const out = JSON.parse(stdout);
-    expect(out.processed).toBe(0);
+  afterAll(() => {
+    fs.rmSync(TEST_STORE_DIR, { recursive: true, force: true });
+  });
+
+  it('drain with no queued tasks reports 0 processed and produces clean JSON stdout', () => {
+    // Use a fresh temp dir so migrations fire on this run -- exercises the
+    // case that caused the prior stdout-pollution bug.
+    const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'proc-cli-fresh-'));
+    try {
+      const r = execFileSync('node', [CLI, 'drain'], {
+        encoding: 'utf-8',
+        env: { ...process.env, CLAUDECLAW_STORE_DIR: freshDir },
+      });
+      // stdout must be exactly one JSON line -- no pino log interleaving.
+      const lines = r.trim().split('\n');
+      expect(lines.length).toBe(1);
+      const out = JSON.parse(lines[0]);
+      expect(out.processed).toBe(0);
+    } finally {
+      fs.rmSync(freshDir, { recursive: true, force: true });
+    }
   });
 
   it('sweep with no stale items reports 0 queued', () => {
