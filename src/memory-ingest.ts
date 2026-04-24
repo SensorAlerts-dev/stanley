@@ -1,5 +1,5 @@
-import { generateContent, parseJsonResponse } from './gemini.js';
-import { cosineSimilarity, embedText } from './embeddings.js';
+import { generateContent, parseJsonResponse, embedText } from './memory-provider.js';
+import { cosineSimilarity } from './embeddings.js';
 import { getMemoriesWithEmbeddings, saveStructuredMemoryAtomic } from './db.js';
 import { logger } from './logger.js';
 

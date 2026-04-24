@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('./gemini.js', () => ({
+vi.mock('./memory-provider.js', () => ({
   generateContent: vi.fn(),
   parseJsonResponse: vi.fn(),
+  embedText: vi.fn(() => Promise.resolve([0.1, 0.2, 0.3])),
 }));
 
 vi.mock('./db.js', () => ({
@@ -11,7 +12,6 @@ vi.mock('./db.js', () => ({
 }));
 
 vi.mock('./embeddings.js', () => ({
-  embedText: vi.fn(() => Promise.resolve([0.1, 0.2, 0.3])),
   cosineSimilarity: vi.fn(() => 0),
 }));
 
@@ -20,7 +20,7 @@ vi.mock('./logger.js', () => ({
 }));
 
 import { ingestConversationTurn } from './memory-ingest.js';
-import { generateContent, parseJsonResponse } from './gemini.js';
+import { generateContent, parseJsonResponse } from './memory-provider.js';
 import { saveStructuredMemoryAtomic } from './db.js';
 
 const mockGenerateContent = vi.mocked(generateContent);
