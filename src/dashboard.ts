@@ -50,7 +50,7 @@ import {
   getWarRoomMeetings,
   getWarRoomTranscript,
 } from './db.js';
-import { generateContent, parseJsonResponse } from './gemini.js';
+import { generateContent, parseJsonResponse } from './memory-provider.js';
 import { getSecurityStatus } from './security.js';
 import { listAgentIds, loadAgentConfig, setAgentModel } from './agent-config.js';
 import {
