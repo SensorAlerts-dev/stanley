@@ -62,7 +62,7 @@ These are powerful but require extra API keys or services. Each one has its own 
 | **Voice input** | `GROQ_API_KEY` (free) | Transcribes your voice notes via Whisper |
 | **Voice output (cloud)** | ElevenLabs, Gradium, or Kokoro | Higher quality than macOS `say` |
 | **Video analysis** | `GOOGLE_API_KEY` | Gemini analyzes videos you send |
-| **Memory consolidation** | `GOOGLE_API_KEY` | Gemini detects patterns across conversations |
+| **Memory consolidation** | None (local Ollama, default) | Pattern detection across conversations. Set `MEMORY_PROVIDER=gemini` + `GOOGLE_API_KEY` to use Gemini instead. |
 | **War Room** | `GOOGLE_API_KEY` + Python venv | Live voice boardroom with your agent team via Gemini Live |
 | **WhatsApp bridge** | Puppeteer + QR scan | Highly experimental. Read/send WhatsApp from Telegram |
 
@@ -85,6 +85,7 @@ Follow these steps in order. The whole thing takes about 5 minutes.
 | **Claude Code CLI** | Install: `npm i -g @anthropic-ai/claude-code` |
 | **Claude account** | Log in: `claude login` (free, Pro, or Max plan) |
 | **Telegram account** | Any existing account works |
+| **Ollama** | Local LLM runtime for memory + processor. Install at [ollama.com](https://ollama.com). After install: `ollama pull qwen2.5:3b-instruct && ollama pull nomic-embed-text` |
 
 **First time using git?** Run these two commands first (use your own name and email):
 ```bash
