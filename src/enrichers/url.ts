@@ -17,11 +17,18 @@ export interface UrlEnrichOutcome {
 }
 
 let sharedBrowser: Browser | null = null;
+let sharedBrowserPromise: Promise<Browser> | null = null;
 
 async function getBrowser(): Promise<Browser> {
   if (sharedBrowser && sharedBrowser.isConnected()) return sharedBrowser;
-  sharedBrowser = await chromium.launch({ headless: true });
-  return sharedBrowser;
+  if (!sharedBrowserPromise) {
+    sharedBrowserPromise = chromium.launch({ headless: true }).then((b) => {
+      sharedBrowser = b;
+      sharedBrowserPromise = null;
+      return b;
+    });
+  }
+  return sharedBrowserPromise;
 }
 
 export async function enrichUrl(url: string, timeoutMs = 30000): Promise<UrlEnrichOutcome> {
@@ -29,9 +36,7 @@ export async function enrichUrl(url: string, timeoutMs = 30000): Promise<UrlEnri
   let page;
   try {
     const browser = await getBrowser();
-    context = await browser.newContext({
-      userAgent: 'Mozilla/5.0 (compatible; ClaudeClaw Processor/1.0)',
-    });
+    context = await browser.newContext();
     page = await context.newPage();
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
     // Wait for network quieter, but cap
@@ -41,28 +46,26 @@ export async function enrichUrl(url: string, timeoutMs = 30000): Promise<UrlEnri
       // ok - some sites never fully idle
     }
 
-    // page.evaluate runs inside the browser (DOM context).
-    // We pass the function as a string to avoid TypeScript checking browser globals
-    // against the Node-only lib (no "dom" in tsconfig).
-    const browserScript = `(() => {
+    const result = await page.evaluate(() => {
       const title = document.title || '';
       const ogTitle = document.querySelector('meta[property="og:title"]')?.getAttribute('content') ?? null;
       const ogDesc = document.querySelector('meta[property="og:description"]')?.getAttribute('content') ?? null;
+
+      // Readability-ish body extraction: prefer <article> or <main>, strip nav/footer/script/style
       const article = document.querySelector('article') ?? document.querySelector('main') ?? document.body;
-      const clone = article.cloneNode(true);
+      const clone = article.cloneNode(true) as HTMLElement;
       for (const sel of ['nav', 'footer', 'script', 'style', 'aside', 'header']) {
         clone.querySelectorAll(sel).forEach((n) => n.remove());
       }
-      const text = (clone.textContent ?? '').replace(/\\s+/g, ' ').trim();
-      return { title: ogTitle ?? title, ogDescription: ogDesc, bodyText: text, finalUrl: location.href };
-    })()`;
+      const text = (clone.textContent ?? '').replace(/\s+/g, ' ').trim();
 
-    const result = await page.evaluate(browserScript) as {
-      title: string;
-      ogDescription: string | null;
-      bodyText: string;
-      finalUrl: string;
-    };
+      return {
+        title: ogTitle ?? title,
+        ogDescription: ogDesc,
+        bodyText: text,
+        finalUrl: location.href,
+      };
+    });
 
     return {
       ok: true,
@@ -92,6 +95,7 @@ function classifyUrlError(msg: string): string {
 export async function closeUrlEnricher(): Promise<void> {
   if (sharedBrowser && sharedBrowser.isConnected()) {
     await sharedBrowser.close();
-    sharedBrowser = null;
   }
+  sharedBrowser = null;
+  sharedBrowserPromise = null;
 }

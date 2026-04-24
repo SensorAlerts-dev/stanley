@@ -49,5 +49,6 @@ describe('url enricher', () => {
     const out = await enrichUrl('https://this-domain-will-never-resolve-xyz123.test/');
     expect(out.ok).toBe(false);
     expect(out.error).toBeTruthy();
+    expect(out.errorCode).toBe('dns_error');
   }, 30000);
 });
