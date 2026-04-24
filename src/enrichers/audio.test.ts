@@ -46,4 +46,13 @@ describe('audio enricher', () => {
     expect(out.ok).toBe(false);
     expect(out.errorCode).toBe('file_missing');
   });
+
+  it('returns whisper_local_missing when local whisper-cpp is absent', async () => {
+    const nodeErr = Object.assign(new Error('spawn whisper-cpp ENOENT'), { code: 'ENOENT' });
+    (transcribeAudio as unknown as ReturnType<typeof vi.fn>).mockRejectedValue(nodeErr);
+
+    const out = await enrichAudio(existingFile);
+    expect(out.ok).toBe(false);
+    expect(out.errorCode).toBe('whisper_local_missing');
+  });
 });

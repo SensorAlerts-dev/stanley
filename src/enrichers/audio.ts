@@ -27,7 +27,7 @@ export async function enrichAudio(audioPath: string): Promise<AudioEnrichOutcome
     const msg = err instanceof Error ? err.message : String(err);
     logger.error({ err, audioPath }, 'Processor: audio transcription failed');
     if (/quota|429|rate/i.test(msg)) return { ok: false, error: msg, errorCode: 'whisper_groq_quota' };
-    if (/ENOENT.*whisper/i.test(msg)) return { ok: false, error: msg, errorCode: 'whisper_local_missing' };
+    if (/ENOENT/i.test(msg) && /whisper/i.test(msg)) return { ok: false, error: msg, errorCode: 'whisper_local_missing' };
     return { ok: false, error: msg, errorCode: 'transcription_failed' };
   }
 }

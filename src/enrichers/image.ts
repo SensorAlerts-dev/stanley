@@ -34,7 +34,7 @@ export async function enrichImage(imagePath: string, languages = 'eng'): Promise
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error({ err, imagePath }, 'Processor: image OCR failed');
-    if (/ENOENT.*tesseract/.test(msg)) {
+    if (/ENOENT/i.test(msg) && /tesseract/i.test(msg)) {
       return {
         ok: false,
         error: 'tesseract binary not found. Install with: brew install tesseract',
