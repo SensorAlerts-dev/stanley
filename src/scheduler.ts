@@ -5,8 +5,6 @@ import { promisify } from 'util';
 import { CronExpressionParser } from 'cron-parser';
 
 import { AGENT_ID, ALLOWED_CHAT_ID, agentMcpAllowlist, PROJECT_ROOT } from './config.js';
-
-const execFileAsync = promisify(execFile);
 import {
   getDueTasks,
   getSession,
@@ -22,6 +20,8 @@ import { logger } from './logger.js';
 import { messageQueue } from './message-queue.js';
 import { runAgent } from './agent.js';
 import { formatForTelegram, splitMessage } from './bot.js';
+
+const execFileAsync = promisify(execFile);
 
 type Sender = (text: string) => Promise<void>;
 
@@ -76,17 +76,24 @@ async function runDueTasks(): Promise<void> {
       const subcommand = task.prompt.split(':')[1];
       const nextRun = computeNextRun(task.schedule);
       markTaskRunning(task.id, nextRun);
-      try {
-        const cliPath = path.join(PROJECT_ROOT, 'dist', 'processor-cli.js');
-        const { stdout } = (await execFileAsync('node', [cliPath, subcommand], {
-          timeout: 9 * 60 * 1000, // generous — full drain with many items can take minutes
-        })) as { stdout: string; stderr: string };
-        updateTaskAfterRun(task.id, nextRun, stdout.trim(), 'success');
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.error({ err, taskId: task.id }, 'Processor scheduled task failed');
-        updateTaskAfterRun(task.id, nextRun, `ERROR: ${msg.slice(0, 400)}`, 'failed');
-      }
+
+      // Fire-and-forget through the message queue so a slow drain doesn't
+      // block the scheduler from processing other due tasks or mission tasks.
+      // All Processor work serialises against the 'processor' queue key.
+      messageQueue.enqueue('processor', async () => {
+        try {
+          const cliPath = path.join(PROJECT_ROOT, 'dist', 'processor-cli.js');
+          const { stdout } = await execFileAsync('node', [cliPath, subcommand], {
+            timeout: 9 * 60 * 1000,
+            encoding: 'utf-8',
+          });
+          updateTaskAfterRun(task.id, nextRun, String(stdout).trim(), 'success');
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          logger.error({ err, taskId: task.id }, 'Processor scheduled task failed');
+          updateTaskAfterRun(task.id, nextRun, `ERROR: ${msg.slice(0, 400)}`, 'failed');
+        }
+      });
       continue; // skip normal agent flow
     }
 
