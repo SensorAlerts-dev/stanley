@@ -88,3 +88,32 @@ describe('processor orchestrator skeleton', () => {
     expect(result.queued).toBe(0);
   });
 });
+
+describe('registerProcessorSchedules', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+  });
+
+  it('creates two scheduled_tasks entries (drain + sweep) on first call', async () => {
+    const { registerProcessorSchedules } = await import('./processor.js');
+    registerProcessorSchedules();
+    const db = _getTestDb();
+    const tasks = db.prepare(`SELECT id, schedule, prompt FROM scheduled_tasks WHERE id IN ('processor-drain','processor-sweep')`).all() as Array<{id: string, schedule: string, prompt: string}>;
+    expect(tasks.length).toBe(2);
+    const drain = tasks.find(t => t.id === 'processor-drain');
+    const sweep = tasks.find(t => t.id === 'processor-sweep');
+    expect(drain?.schedule).toBe('* * * * *');       // every minute
+    expect(sweep?.schedule).toBe('0 * * * *');       // every hour on :00
+    expect(drain?.prompt).toContain('drain');
+    expect(sweep?.prompt).toContain('sweep');
+  });
+
+  it('is idempotent (calling twice does not duplicate rows)', async () => {
+    const { registerProcessorSchedules } = await import('./processor.js');
+    registerProcessorSchedules();
+    registerProcessorSchedules();
+    const db = _getTestDb();
+    const count = (db.prepare(`SELECT COUNT(*) AS n FROM scheduled_tasks WHERE id IN ('processor-drain','processor-sweep')`).get() as { n: number }).n;
+    expect(count).toBe(2);
+  });
+});

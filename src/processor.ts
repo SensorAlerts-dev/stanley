@@ -210,3 +210,32 @@ async function processTask(item: FullItem): Promise<EnrichOutcome> {
     errorCode: 'no_enricher',
   };
 }
+
+/**
+ * Register the two Processor cron entries in scheduled_tasks.
+ * Idempotent: uses INSERT OR IGNORE so repeated calls are no-ops.
+ * Call once at ClaudeClaw startup (after initDatabase).
+ *
+ * processor-drain: runs every minute — claims and processes queued mission_tasks.
+ * processor-sweep: runs every hour  — queues tasks for unenriched library_items.
+ *
+ * agent_id defaults to 'main' (the default column value) so the main scheduler
+ * picks these up. The processor-cli shelling logic in scheduler.ts intercepts
+ * these prompts before they reach the Claude agent.
+ */
+export function registerProcessorSchedules(): void {
+  const db = _getTestDb();
+  const now = Math.floor(Date.now() / 1000);
+  const nextMin = now + 60;    // first drain fires ~1 minute after startup
+  const nextHour = now + 3600; // first sweep fires ~1 hour after startup
+
+  db.prepare(`
+    INSERT OR IGNORE INTO scheduled_tasks (id, prompt, schedule, next_run, status, created_at)
+    VALUES ('processor-drain', 'processor:drain', '* * * * *', ?, 'active', ?)
+  `).run(nextMin, now);
+
+  db.prepare(`
+    INSERT OR IGNORE INTO scheduled_tasks (id, prompt, schedule, next_run, status, created_at)
+    VALUES ('processor-sweep', 'processor:sweep', '0 * * * *', ?, 'active', ?)
+  `).run(nextHour, now);
+}

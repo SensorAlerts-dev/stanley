@@ -15,6 +15,7 @@ import { runDecaySweep } from './memory.js';
 import { initOAuthHealthCheck } from './oauth-health.js';
 import { initOrchestrator } from './orchestrator.js';
 import { initScheduler } from './scheduler.js';
+import { registerProcessorSchedules } from './processor.js';
 import { setTelegramConnected, setBotInfo } from './state.js';
 
 // Parse --agent flag
@@ -133,6 +134,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   logger.info('Database ready');
+
+  // Register Processor cron entries (idempotent — safe to call on every startup).
+  registerProcessorSchedules();
 
   // Initialize security (PIN lock, kill phrase, destructive confirmation, audit)
   initSecurity({

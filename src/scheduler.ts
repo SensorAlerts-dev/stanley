@@ -1,6 +1,12 @@
+import path from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
 import { CronExpressionParser } from 'cron-parser';
 
-import { AGENT_ID, ALLOWED_CHAT_ID, agentMcpAllowlist } from './config.js';
+import { AGENT_ID, ALLOWED_CHAT_ID, agentMcpAllowlist, PROJECT_ROOT } from './config.js';
+
+const execFileAsync = promisify(execFile);
 import {
   getDueTasks,
   getSession,
@@ -65,6 +71,25 @@ async function runDueTasks(): Promise<void> {
   }
 
   for (const task of tasks) {
+    // Phase 3 Processor: handle via deterministic shell-out, not the agent.
+    if (task.prompt === 'processor:drain' || task.prompt === 'processor:sweep') {
+      const subcommand = task.prompt.split(':')[1];
+      const nextRun = computeNextRun(task.schedule);
+      markTaskRunning(task.id, nextRun);
+      try {
+        const cliPath = path.join(PROJECT_ROOT, 'dist', 'processor-cli.js');
+        const { stdout } = (await execFileAsync('node', [cliPath, subcommand], {
+          timeout: 9 * 60 * 1000, // generous — full drain with many items can take minutes
+        })) as { stdout: string; stderr: string };
+        updateTaskAfterRun(task.id, nextRun, stdout.trim(), 'success');
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        logger.error({ err, taskId: task.id }, 'Processor scheduled task failed');
+        updateTaskAfterRun(task.id, nextRun, `ERROR: ${msg.slice(0, 400)}`, 'failed');
+      }
+      continue; // skip normal agent flow
+    }
+
     // In-memory guard: skip if already running in this process
     if (runningTaskIds.has(task.id)) {
       logger.warn({ taskId: task.id }, 'Task already running, skipping duplicate fire');
