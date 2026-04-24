@@ -13,17 +13,27 @@
  */
 
 import { randomBytes } from 'crypto';
+import { LIBRARY_ROOT } from './config.js';
 import {
   _getTestDb,
   getItem,
   markEnriched,
+  addContent,
   type FullItem,
 } from './library.js';
 import { logger } from './logger.js';
+import { enrichUrl } from './enrichers/url.js';
+import { enrichImage } from './enrichers/image.js';
+import { summarize, headline } from './enrichers/ollama.js';
 
 const PROCESSOR_AGENT_ID = 'processor';
 const MAX_ATTEMPTS = 3;
 const DEFAULT_MAX_TASKS = 10;
+
+const GENERIC_TITLES = new Set([
+  'tiktok - make your day', 'instagram', 'facebook',
+  'youtube', 'x', 'twitter', 'reddit', 'threads', 'linkedin',
+]);
 
 export interface DrainResult {
   processed: number;
@@ -198,17 +208,117 @@ function logHiveMind(
 }
 
 async function processTask(item: FullItem): Promise<EnrichOutcome> {
-  // Placeholder dispatcher. Real enrichers get wired in Waves 2 and 3.
-  // For Wave 1 the orchestrator just declares success for notes (which are
-  // already enriched at ingest) and defers everything else.
+  // Notes: already enriched at ingest
   if (item.source_type === 'note') {
-    return { ok: true, summaryHint: 'note (already enriched)' };
+    return { ok: true, summaryHint: 'note (skipped)' };
   }
+
+  // URL items (source_type is any platform + has url)
+  if (item.url && item.source_type !== 'screenshot' && item.source_type !== 'file' && item.source_type !== 'voice') {
+    return await enrichUrlItem(item);
+  }
+
+  // Screenshot (image)
+  if (item.source_type === 'screenshot' && item.media.length > 0) {
+    const media = item.media[0] as { media_type: string; file_path: string };
+    if (media.media_type === 'image') {
+      return await enrichImageItem(item, media.file_path);
+    }
+  }
+
   return {
     ok: false,
     error: `no enricher registered for source_type=${item.source_type}`,
     errorCode: 'no_enricher',
   };
+}
+
+async function enrichUrlItem(item: FullItem): Promise<EnrichOutcome> {
+  const out = await enrichUrl(item.url!);
+  if (!out.ok) {
+    return { ok: false, error: out.error, errorCode: out.errorCode };
+  }
+
+  // Write raw body text
+  if (out.bodyText && out.bodyText.length > 0) {
+    addContent(item.id, {
+      content_type: 'scraped_summary',
+      text: out.bodyText,
+      source_agent: 'processor',
+    });
+  }
+
+  // Summarize via Ollama (graceful if Ollama down)
+  let summary: string | null = null;
+  try {
+    summary = await summarize(out.bodyText ?? out.title ?? '');
+  } catch (err) {
+    logger.warn({ err }, 'Processor: Ollama summarize failed, continuing without summary');
+  }
+  if (summary) {
+    addContent(item.id, {
+      content_type: 'ai_summary',
+      text: summary,
+      source_agent: 'processor',
+    });
+  }
+
+  // Update title if generic or missing
+  const current = (item.title ?? '').toLowerCase().trim();
+  if (!current || GENERIC_TITLES.has(current)) {
+    try {
+      const newTitle = await headline(out.bodyText ?? out.title ?? '');
+      if (newTitle) {
+        const db = _getTestDb();
+        db.prepare(`UPDATE library_items SET title = ? WHERE id = ?`).run(newTitle.slice(0, 200), item.id);
+      }
+    } catch (err) {
+      logger.warn({ err }, 'Processor: Ollama headline failed, keeping existing title');
+    }
+  }
+
+  return { ok: true, summaryHint: 'url scrape + summary' };
+}
+
+async function enrichImageItem(item: FullItem, relativePath: string): Promise<EnrichOutcome> {
+  const absPath = `${LIBRARY_ROOT}/${relativePath}`;
+  const out = await enrichImage(absPath);
+  if (!out.ok) {
+    return { ok: false, error: out.error, errorCode: out.errorCode };
+  }
+
+  const text = out.text ?? '';
+  if (text.length > 0) {
+    addContent(item.id, {
+      content_type: 'ocr',
+      text,
+      source_agent: 'processor',
+    });
+  }
+
+  if (text.length >= 100) {
+    try {
+      const summary = await summarize(text);
+      if (summary) {
+        addContent(item.id, {
+          content_type: 'ai_summary',
+          text: summary,
+          source_agent: 'processor',
+        });
+      }
+      if (!item.title) {
+        const h = await headline(text);
+        if (h) {
+          const db = _getTestDb();
+          db.prepare(`UPDATE library_items SET title = ? WHERE id = ?`).run(h.slice(0, 200), item.id);
+        }
+      }
+    } catch (err) {
+      logger.warn({ err }, 'Processor: Ollama call failed for image, continuing with raw OCR');
+    }
+  }
+
+  return { ok: true, summaryHint: 'OCR + summary' };
 }
 
 /**

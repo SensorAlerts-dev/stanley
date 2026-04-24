@@ -117,3 +117,99 @@ describe('registerProcessorSchedules', () => {
     expect(count).toBe(2);
   });
 });
+
+describe('processor end-to-end: URL enrichment', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+    vi.clearAllMocks();
+  });
+
+  it('drain processes a URL item: raw body + ai_summary written, enriched_at set', async () => {
+    const db = _getTestDb();
+    const now = Math.floor(Date.now() / 1000);
+
+    // Mock enricher to return deterministic content
+    const urlMod = await import('./enrichers/url.js');
+    vi.spyOn(urlMod, 'enrichUrl').mockResolvedValue({
+      ok: true,
+      title: 'Mocked Article',
+      ogDescription: 'From mock enrichUrl',
+      bodyText: 'Paragraph about water kefir fermentation from the mocked page.',
+      finalUrl: 'https://example.com/mocked',
+    });
+
+    // Mock Ollama so tests don't need the daemon
+    const ollamaMod = await import('./enrichers/ollama.js');
+    vi.spyOn(ollamaMod, 'summarize').mockResolvedValue('Mocked 1-2 sentence summary.');
+    vi.spyOn(ollamaMod, 'headline').mockResolvedValue('Mocked headline');
+
+    const itemId = (db.prepare(`
+      INSERT INTO library_items (source_type, url, captured_at, project, created_at)
+      VALUES ('article', 'https://example.com/x', ?, 'general', ?)
+    `).run(now, now).lastInsertRowid as number);
+
+    db.prepare(`
+      INSERT INTO mission_tasks (id, title, prompt, assigned_agent, status, created_by, priority, created_at)
+      VALUES ('t-url', 'process', 'Process library item ${itemId}: URL needs scrape + summary', 'processor', 'queued', 'memobot', 0, ?)
+    `).run(now);
+
+    const result = await drainQueue();
+    expect(result.completed).toBe(1);
+
+    // Verify item_content rows
+    const contents = db.prepare(`SELECT content_type, text FROM item_content WHERE item_id = ?`).all(itemId) as Array<{ content_type: string; text: string }>;
+    const types = contents.map((c) => c.content_type).sort();
+    expect(types).toContain('scraped_summary');
+    expect(types).toContain('ai_summary');
+
+    // enriched_at set
+    const li = db.prepare(`SELECT enriched_at FROM library_items WHERE id = ?`).get(itemId) as { enriched_at: number | null };
+    expect(li.enriched_at).toBeGreaterThan(0);
+
+    // mission_task completed
+    const t = db.prepare(`SELECT status FROM mission_tasks WHERE id = 't-url'`).get() as { status: string };
+    expect(t.status).toBe('completed');
+  });
+});
+
+describe('processor end-to-end: image enrichment', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+    vi.clearAllMocks();
+  });
+
+  it('drain processes a screenshot item: OCR text + ai_summary written', async () => {
+    const db = _getTestDb();
+    const now = Math.floor(Date.now() / 1000);
+
+    const imageMod = await import('./enrichers/image.js');
+    vi.spyOn(imageMod, 'enrichImage').mockResolvedValue({
+      ok: true,
+      text: 'KEFIR FERMENTATION TIMES AT 72F (detailed notes extracted from the screenshot, 400 chars of text, far more than the 100-char summary threshold so it will be summarized).',
+    });
+
+    const ollamaMod = await import('./enrichers/ollama.js');
+    vi.spyOn(ollamaMod, 'summarize').mockResolvedValue('A notes screenshot on kefir fermentation timing at 72F.');
+    vi.spyOn(ollamaMod, 'headline').mockResolvedValue('Kefir Fermentation Notes');
+
+    const itemId = (db.prepare(`
+      INSERT INTO library_items (source_type, captured_at, project, created_at)
+      VALUES ('screenshot', ?, 'general', ?)
+    `).run(now, now).lastInsertRowid as number);
+    db.prepare(`
+      INSERT INTO item_media (item_id, media_type, file_path, storage, created_at)
+      VALUES (?, 'image', 'general/screenshots/test.png', 'local', ?)
+    `).run(itemId, now);
+    db.prepare(`
+      INSERT INTO mission_tasks (id, title, prompt, assigned_agent, status, created_by, priority, created_at)
+      VALUES ('t-img', 'process', 'Process library item ${itemId}: screenshot needs OCR', 'processor', 'queued', 'memobot', 0, ?)
+    `).run(now);
+
+    const result = await drainQueue();
+    expect(result.completed).toBe(1);
+
+    const types = (db.prepare(`SELECT content_type FROM item_content WHERE item_id = ?`).all(itemId) as Array<{ content_type: string }>).map(r => r.content_type).sort();
+    expect(types).toContain('ocr');
+    expect(types).toContain('ai_summary');
+  });
+});
