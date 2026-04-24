@@ -365,3 +365,40 @@ describe('processor retry policy', () => {
     expect(li.enriched_at).toBeNull();
   });
 });
+
+describe('processor graceful Ollama degradation', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+    vi.clearAllMocks();
+  });
+
+  it('still writes raw extraction when Ollama summarize throws', async () => {
+    const db = _getTestDb();
+    const now = Math.floor(Date.now() / 1000);
+
+    const urlMod = await import('./enrichers/url.js');
+    vi.spyOn(urlMod, 'enrichUrl').mockResolvedValue({
+      ok: true,
+      title: 'Working',
+      bodyText: 'Sufficient body text for summarization but Ollama will fail on this path.',
+    });
+    const ollamaMod = await import('./enrichers/ollama.js');
+    vi.spyOn(ollamaMod, 'summarize').mockRejectedValue(new Error('Ollama not reachable'));
+    vi.spyOn(ollamaMod, 'headline').mockRejectedValue(new Error('Ollama not reachable'));
+
+    const itemId = (db.prepare(`INSERT INTO library_items (source_type, url, captured_at, project, created_at) VALUES ('article', 'https://example.com/z', ?, 'general', ?)`).run(now, now).lastInsertRowid as number);
+    db.prepare(`INSERT INTO mission_tasks (id, title, prompt, assigned_agent, status, created_by, priority, created_at) VALUES ('t-ollama', 'p', 'Process library item ${itemId}: url', 'processor', 'queued', 'memobot', 0, ?)`).run(now);
+
+    const result = await drainQueue();
+    expect(result.completed).toBe(1);
+
+    // Raw body landed, summary did not
+    const types = (db.prepare(`SELECT content_type FROM item_content WHERE item_id = ?`).all(itemId) as Array<{ content_type: string }>).map(r => r.content_type);
+    expect(types).toContain('scraped_summary');
+    expect(types).not.toContain('ai_summary');
+
+    // enriched_at set (raw extraction was successful)
+    const li = db.prepare(`SELECT enriched_at FROM library_items WHERE id = ?`).get(itemId) as { enriched_at: number };
+    expect(li.enriched_at).toBeGreaterThan(0);
+  });
+});
