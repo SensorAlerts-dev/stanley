@@ -79,10 +79,14 @@ export async function drainQueue(opts: { maxTasks?: number } = {}): Promise<Drai
   const maxTasks = opts.maxTasks ?? DEFAULT_MAX_TASKS;
   const db = _getTestDb();
   const result: DrainResult = { processed: 0, completed: 0, failed: 0, skipped: 0 };
+  // Don't re-pick the same task within a single drain — failed tasks requeue
+  // for the NEXT drain cycle, not this one.
+  const seen: string[] = [];
 
   for (let i = 0; i < maxTasks; i++) {
-    const task = claimOne(db);
+    const task = claimOne(db, seen);
     if (!task) break;
+    seen.push(task.id);
 
     result.processed++;
 
@@ -179,15 +183,19 @@ interface ClaimedTask {
   attempts: number;
 }
 
-function claimOne(db: ReturnType<typeof _getTestDb>): ClaimedTask | null {
+function claimOne(db: ReturnType<typeof _getTestDb>, excludeIds: string[] = []): ClaimedTask | null {
+  const placeholders = excludeIds.map(() => '?').join(',');
+  const exclusionClause = excludeIds.length > 0 ? `AND id NOT IN (${placeholders})` : '';
+  const sql = `
+    SELECT id, prompt, attempts FROM mission_tasks
+    WHERE assigned_agent = 'processor' AND status = 'queued'
+      AND attempts < ${MAX_ATTEMPTS}
+      ${exclusionClause}
+    ORDER BY priority DESC, created_at ASC
+    LIMIT 1
+  `;
   const txn = db.transaction(() => {
-    const task = db.prepare(`
-      SELECT id, prompt, attempts FROM mission_tasks
-      WHERE assigned_agent = 'processor' AND status = 'queued'
-        AND attempts < ${MAX_ATTEMPTS}
-      ORDER BY priority DESC, created_at ASC
-      LIMIT 1
-    `).get() as ClaimedTask | undefined;
+    const task = db.prepare(sql).get(...excludeIds) as ClaimedTask | undefined;
     if (!task) return null;
     db.prepare(`UPDATE mission_tasks SET status = 'running', started_at = ? WHERE id = ?`)
       .run(Math.floor(Date.now() / 1000), task.id);

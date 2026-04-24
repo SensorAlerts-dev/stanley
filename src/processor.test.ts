@@ -308,3 +308,60 @@ describe('processor end-to-end: PDF + audio + video', () => {
     expect(types).toContain('ai_summary');
   });
 });
+
+describe('processor retry policy', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+    vi.clearAllMocks();
+  });
+
+  it('retries a failing task twice then marks failed on 3rd attempt', async () => {
+    const db = _getTestDb();
+    const now = Math.floor(Date.now() / 1000);
+
+    const urlMod = await import('./enrichers/url.js');
+    vi.spyOn(urlMod, 'enrichUrl').mockResolvedValue({
+      ok: false,
+      error: 'simulated fail',
+      errorCode: 'playwright_timeout',
+    });
+
+    const itemId = (db.prepare(`
+      INSERT INTO library_items (source_type, url, captured_at, project, created_at)
+      VALUES ('article', 'https://example.com/x', ?, 'general', ?)
+    `).run(now, now).lastInsertRowid as number);
+    db.prepare(`INSERT INTO mission_tasks (id, title, prompt, assigned_agent, status, created_by, priority, created_at) VALUES ('t-retry', 'p', 'Process library item ${itemId}: x', 'processor', 'queued', 'memobot', 0, ?)`).run(now);
+
+    type RetryRow = { status: string; attempts: number; error: string | null };
+    const readRow = () => db.prepare(`SELECT status, attempts, error FROM mission_tasks WHERE id = 't-retry'`).get() as RetryRow;
+
+    // Attempt 1 (fails, requeues)
+    let result = await drainQueue();
+    expect(result.skipped).toBe(1);
+    let row = readRow();
+    expect(row.status).toBe('queued');
+    expect(row.attempts).toBe(1);
+
+    // Attempt 2 (fails, requeues)
+    result = await drainQueue();
+    expect(result.skipped).toBe(1);
+    row = readRow();
+    expect(row.status).toBe('queued');
+    expect(row.attempts).toBe(2);
+
+    // Attempt 3 (fails, marks failed)
+    result = await drainQueue();
+    expect(result.failed).toBe(1);
+    row = readRow();
+    expect(row.status).toBe('failed');
+    expect(row.attempts).toBe(3);
+
+    // Attempt 4 (no-op, skipped because attempts >= MAX_ATTEMPTS filter in claim query)
+    result = await drainQueue();
+    expect(result.processed).toBe(0);
+
+    // enriched_at should still be NULL after permanent failure
+    const li = db.prepare(`SELECT enriched_at FROM library_items WHERE id = ?`).get(itemId) as { enriched_at: number | null };
+    expect(li.enriched_at).toBeNull();
+  });
+});
