@@ -13,6 +13,7 @@
  */
 
 import { randomBytes } from 'crypto';
+import path from 'path';
 import { LIBRARY_ROOT } from './config.js';
 import {
   _getTestDb,
@@ -34,6 +35,21 @@ const GENERIC_TITLES = new Set([
   'tiktok - make your day', 'instagram', 'facebook',
   'youtube', 'x', 'twitter', 'reddit', 'threads', 'linkedin',
 ]);
+
+const FILENAME_TITLE_PATTERNS: RegExp[] = [
+  /^img[_ -]?\d+/i,           // IMG_1234, IMG 1234, img-1234
+  /^screenshot\b/i,            // "Screenshot 2026-04-23 at 10.00.00 AM"
+  /^photo[_ -]?\d*/i,          // Photo 1, photo_2, etc.
+  /\.(png|jpe?g|webp|gif|heic)$/i,  // bare filename ending in image ext
+];
+
+function isGenericTitle(title: string | null | undefined): boolean {
+  if (!title) return true;
+  const normalized = title.toLowerCase().trim();
+  if (!normalized) return true;
+  if (GENERIC_TITLES.has(normalized)) return true;
+  return FILENAME_TITLE_PATTERNS.some((re) => re.test(normalized));
+}
 
 export interface DrainResult {
   processed: number;
@@ -253,7 +269,7 @@ async function enrichUrlItem(item: FullItem): Promise<EnrichOutcome> {
   try {
     summary = await summarize(out.bodyText ?? out.title ?? '');
   } catch (err) {
-    logger.warn({ err }, 'Processor: Ollama summarize failed, continuing without summary');
+    logger.warn({ err, itemId: item.id }, 'Processor: Ollama summarize failed, continuing without summary');
   }
   if (summary) {
     addContent(item.id, {
@@ -264,8 +280,7 @@ async function enrichUrlItem(item: FullItem): Promise<EnrichOutcome> {
   }
 
   // Update title if generic or missing
-  const current = (item.title ?? '').toLowerCase().trim();
-  if (!current || GENERIC_TITLES.has(current)) {
+  if (isGenericTitle(item.title)) {
     try {
       const newTitle = await headline(out.bodyText ?? out.title ?? '');
       if (newTitle) {
@@ -273,7 +288,7 @@ async function enrichUrlItem(item: FullItem): Promise<EnrichOutcome> {
         db.prepare(`UPDATE library_items SET title = ? WHERE id = ?`).run(newTitle.slice(0, 200), item.id);
       }
     } catch (err) {
-      logger.warn({ err }, 'Processor: Ollama headline failed, keeping existing title');
+      logger.warn({ err, itemId: item.id }, 'Processor: Ollama headline failed, keeping existing title');
     }
   }
 
@@ -281,7 +296,7 @@ async function enrichUrlItem(item: FullItem): Promise<EnrichOutcome> {
 }
 
 async function enrichImageItem(item: FullItem, relativePath: string): Promise<EnrichOutcome> {
-  const absPath = `${LIBRARY_ROOT}/${relativePath}`;
+  const absPath = path.join(LIBRARY_ROOT, relativePath);
   const out = await enrichImage(absPath);
   if (!out.ok) {
     return { ok: false, error: out.error, errorCode: out.errorCode };
@@ -306,7 +321,7 @@ async function enrichImageItem(item: FullItem, relativePath: string): Promise<En
           source_agent: 'processor',
         });
       }
-      if (!item.title) {
+      if (isGenericTitle(item.title)) {
         const h = await headline(text);
         if (h) {
           const db = _getTestDb();
@@ -314,7 +329,7 @@ async function enrichImageItem(item: FullItem, relativePath: string): Promise<En
         }
       }
     } catch (err) {
-      logger.warn({ err }, 'Processor: Ollama call failed for image, continuing with raw OCR');
+      logger.warn({ err, itemId: item.id }, 'Processor: Ollama call failed for image, continuing with raw OCR');
     }
   }
 

@@ -193,8 +193,8 @@ describe('processor end-to-end: image enrichment', () => {
     vi.spyOn(ollamaMod, 'headline').mockResolvedValue('Kefir Fermentation Notes');
 
     const itemId = (db.prepare(`
-      INSERT INTO library_items (source_type, captured_at, project, created_at)
-      VALUES ('screenshot', ?, 'general', ?)
+      INSERT INTO library_items (source_type, title, captured_at, project, created_at)
+      VALUES ('screenshot', 'IMG_1234.png', ?, 'general', ?)
     `).run(now, now).lastInsertRowid as number);
     db.prepare(`
       INSERT INTO item_media (item_id, media_type, file_path, storage, created_at)
@@ -211,5 +211,9 @@ describe('processor end-to-end: image enrichment', () => {
     const types = (db.prepare(`SELECT content_type FROM item_content WHERE item_id = ?`).all(itemId) as Array<{ content_type: string }>).map(r => r.content_type).sort();
     expect(types).toContain('ocr');
     expect(types).toContain('ai_summary');
+
+    // Title was a filename-like placeholder; should have been replaced via Ollama headline
+    const titleRow = db.prepare(`SELECT title FROM library_items WHERE id = ?`).get(itemId) as { title: string };
+    expect(titleRow.title).toBe('Kefir Fermentation Notes');
   });
 });
