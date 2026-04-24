@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('./gemini.js', () => ({
+vi.mock('./memory-provider.js', () => ({
   generateContent: vi.fn(),
   parseJsonResponse: vi.fn(),
+  embedText: vi.fn(() => Promise.resolve([0.1, 0.2, 0.3])),
 }));
 
 vi.mock('./db.js', () => ({
@@ -11,16 +12,12 @@ vi.mock('./db.js', () => ({
   saveConsolidationEmbedding: vi.fn(),
 }));
 
-vi.mock('./embeddings.js', () => ({
-  embedText: vi.fn(() => Promise.resolve([])),
-}));
-
 vi.mock('./logger.js', () => ({
   logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn(), debug: vi.fn() },
 }));
 
 import { runConsolidation } from './memory-consolidate.js';
-import { generateContent, parseJsonResponse } from './gemini.js';
+import { generateContent, parseJsonResponse } from './memory-provider.js';
 import {
   getUnconsolidatedMemories,
   saveConsolidationAtomic,

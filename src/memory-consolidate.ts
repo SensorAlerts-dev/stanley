@@ -1,10 +1,9 @@
-import { generateContent, parseJsonResponse } from './gemini.js';
+import { generateContent, parseJsonResponse, embedText } from './memory-provider.js';
 import {
   getUnconsolidatedMemories,
   saveConsolidationAtomic,
   saveConsolidationEmbedding,
 } from './db.js';
-import { embedText } from './embeddings.js';
 import { logger } from './logger.js';
 
 interface ConsolidationResult {
