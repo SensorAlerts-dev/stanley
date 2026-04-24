@@ -16,8 +16,8 @@ import {
   searchConversationHistory,
   searchMemories,
 } from './db.js';
-import { cosineSimilarity, embedText } from './embeddings.js';
-import { generateContent, parseJsonResponse } from './gemini.js';
+import { cosineSimilarity } from './embeddings.js';
+import { generateContent, parseJsonResponse, embedText } from './memory-provider.js';
 import { logger } from './logger.js';
 import { ingestConversationTurn } from './memory-ingest.js';
 import { buildObsidianContext } from './obsidian.js';

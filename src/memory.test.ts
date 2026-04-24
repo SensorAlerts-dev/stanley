@@ -21,14 +21,14 @@ vi.mock('./memory-ingest.js', () => ({
   ingestConversationTurn: vi.fn(() => Promise.resolve(false)),
 }));
 
-vi.mock('./embeddings.js', () => ({
-  embedText: vi.fn(() => Promise.resolve([])),
-  cosineSimilarity: vi.fn(() => 0),
+vi.mock('./memory-provider.js', () => ({
+  generateContent: vi.fn(),
+  parseJsonResponse: vi.fn(() => null),
+  embedText: vi.fn(() => Promise.resolve([0.1, 0.2, 0.3])),
 }));
 
-vi.mock('./gemini.js', () => ({
-  generateContent: vi.fn(() => Promise.resolve('[]')),
-  parseJsonResponse: vi.fn(() => []),
+vi.mock('./embeddings.js', () => ({
+  cosineSimilarity: vi.fn(() => 0),
 }));
 
 import {
