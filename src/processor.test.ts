@@ -217,3 +217,94 @@ describe('processor end-to-end: image enrichment', () => {
     expect(titleRow.title).toBe('Kefir Fermentation Notes');
   });
 });
+
+describe('processor end-to-end: PDF + audio + video', () => {
+  beforeEach(() => {
+    _initTestDatabase();
+    vi.clearAllMocks();
+  });
+
+  it('PDF items produce transcript + ai_summary', async () => {
+    const db = _getTestDb();
+    const now = Math.floor(Date.now() / 1000);
+
+    const pdfMod = await import('./enrichers/pdf.js');
+    vi.spyOn(pdfMod, 'enrichPdf').mockResolvedValue({
+      ok: true,
+      text: 'A quarterly report on probiotic kefir fermentation methods at various temperatures. Extensive findings across multiple sections.',
+    });
+    const ollamaMod = await import('./enrichers/ollama.js');
+    vi.spyOn(ollamaMod, 'summarize').mockResolvedValue('Quarterly report on kefir fermentation.');
+    vi.spyOn(ollamaMod, 'headline').mockResolvedValue('Q1 Kefir Report');
+
+    const itemId = (db.prepare(`
+      INSERT INTO library_items (source_type, captured_at, project, created_at)
+      VALUES ('file', ?, 'general', ?)
+    `).run(now, now).lastInsertRowid as number);
+    db.prepare(`INSERT INTO item_media (item_id, media_type, file_path, storage, created_at) VALUES (?, 'pdf', 'general/pdfs/x.pdf', 'local', ?)`).run(itemId, now);
+    db.prepare(`INSERT INTO mission_tasks (id, title, prompt, assigned_agent, status, created_by, priority, created_at) VALUES ('t-pdf', 'process', 'Process library item ${itemId}: pdf needs text extraction', 'processor', 'queued', 'memobot', 0, ?)`).run(now);
+
+    const result = await drainQueue();
+    expect(result.completed).toBe(1);
+
+    const types = (db.prepare(`SELECT content_type FROM item_content WHERE item_id = ?`).all(itemId) as Array<{ content_type: string }>).map(r => r.content_type).sort();
+    expect(types).toContain('transcript');
+    expect(types).toContain('ai_summary');
+  });
+
+  it('video items produce transcript + ai_summary', async () => {
+    const db = _getTestDb();
+    const now = Math.floor(Date.now() / 1000);
+
+    const videoMod = await import('./enrichers/video.js');
+    vi.spyOn(videoMod, 'enrichVideo').mockResolvedValue({
+      ok: true,
+      text: 'Today I want to show you how to brew water kefir at home. It is fermented with kefir grains in a sugar water solution.',
+    });
+    const ollamaMod = await import('./enrichers/ollama.js');
+    vi.spyOn(ollamaMod, 'summarize').mockResolvedValue('Tutorial on brewing water kefir at home with grains in sugar water.');
+    vi.spyOn(ollamaMod, 'headline').mockResolvedValue('Water Kefir Brewing Tutorial');
+
+    const itemId = (db.prepare(`
+      INSERT INTO library_items (source_type, captured_at, project, created_at)
+      VALUES ('file', ?, 'general', ?)
+    `).run(now, now).lastInsertRowid as number);
+    db.prepare(`INSERT INTO item_media (item_id, media_type, file_path, storage, created_at) VALUES (?, 'video', 'general/videos/x.mp4', 'local', ?)`).run(itemId, now);
+    db.prepare(`INSERT INTO mission_tasks (id, title, prompt, assigned_agent, status, created_by, priority, created_at) VALUES ('t-vid', 'process', 'Process library item ${itemId}: video needs transcription', 'processor', 'queued', 'memobot', 0, ?)`).run(now);
+
+    const result = await drainQueue();
+    expect(result.completed).toBe(1);
+
+    const types = (db.prepare(`SELECT content_type FROM item_content WHERE item_id = ?`).all(itemId) as Array<{ content_type: string }>).map(r => r.content_type).sort();
+    expect(types).toContain('transcript');
+    expect(types).toContain('ai_summary');
+  });
+
+  it('audio-only files are transcribed', async () => {
+    const db = _getTestDb();
+    const now = Math.floor(Date.now() / 1000);
+
+    const audioMod = await import('./enrichers/audio.js');
+    vi.spyOn(audioMod, 'enrichAudio').mockResolvedValue({
+      ok: true,
+      text: 'Podcast excerpt discussing fermentation safety at room temperature. The host covers best practices for avoiding contamination during home fermentation.',
+    });
+    const ollamaMod = await import('./enrichers/ollama.js');
+    vi.spyOn(ollamaMod, 'summarize').mockResolvedValue('Podcast on fermentation safety.');
+    vi.spyOn(ollamaMod, 'headline').mockResolvedValue('Fermentation Safety Podcast');
+
+    const itemId = (db.prepare(`
+      INSERT INTO library_items (source_type, captured_at, project, created_at)
+      VALUES ('file', ?, 'general', ?)
+    `).run(now, now).lastInsertRowid as number);
+    db.prepare(`INSERT INTO item_media (item_id, media_type, file_path, storage, created_at) VALUES (?, 'audio', 'general/audio/x.mp3', 'local', ?)`).run(itemId, now);
+    db.prepare(`INSERT INTO mission_tasks (id, title, prompt, assigned_agent, status, created_by, priority, created_at) VALUES ('t-aud', 'process', 'Process library item ${itemId}: audio needs transcription', 'processor', 'queued', 'memobot', 0, ?)`).run(now);
+
+    const result = await drainQueue();
+    expect(result.completed).toBe(1);
+
+    const types = (db.prepare(`SELECT content_type FROM item_content WHERE item_id = ?`).all(itemId) as Array<{ content_type: string }>).map(r => r.content_type).sort();
+    expect(types).toContain('transcript');
+    expect(types).toContain('ai_summary');
+  });
+});

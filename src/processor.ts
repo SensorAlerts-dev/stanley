@@ -25,6 +25,9 @@ import {
 import { logger } from './logger.js';
 import { enrichUrl } from './enrichers/url.js';
 import { enrichImage } from './enrichers/image.js';
+import { enrichPdf } from './enrichers/pdf.js';
+import { enrichAudio } from './enrichers/audio.js';
+import { enrichVideo } from './enrichers/video.js';
 import { summarize, headline } from './enrichers/ollama.js';
 
 const PROCESSOR_AGENT_ID = 'processor';
@@ -242,6 +245,35 @@ async function processTask(item: FullItem): Promise<EnrichOutcome> {
     }
   }
 
+  // File items (pdf/video/audio)
+  if (item.source_type === 'file' && item.media.length > 0) {
+    const media = item.media[0] as { media_type: string; file_path: string };
+    const absPath = path.join(LIBRARY_ROOT, media.file_path);
+    let extracted: { ok: boolean; text?: string; error?: string; errorCode?: string };
+    if (media.media_type === 'pdf') {
+      extracted = await enrichPdf(absPath);
+    } else if (media.media_type === 'video') {
+      extracted = await enrichVideo(absPath);
+    } else if (media.media_type === 'audio') {
+      extracted = await enrichAudio(absPath);
+    } else {
+      return { ok: true, summaryHint: `unsupported media type ${media.media_type} (skipped)` };
+    }
+
+    if (!extracted.ok) return { ok: false, error: extracted.error, errorCode: extracted.errorCode };
+    return await enrichFromExtractedText(item, extracted.text ?? '', media.media_type);
+  }
+
+  // Voice notes (transcript already written by memobot at ingest)
+  if (item.source_type === 'voice') {
+    const db = _getTestDb();
+    const existing = db.prepare(`SELECT text FROM item_content WHERE item_id = ? AND content_type = 'transcript' LIMIT 1`).get(item.id) as { text: string } | undefined;
+    if (existing) {
+      return await enrichFromExtractedText(item, existing.text, 'voice-transcript-existing');
+    }
+    return { ok: false, error: 'voice note missing transcript', errorCode: 'no_transcript' };
+  }
+
   return {
     ok: false,
     error: `no enricher registered for source_type=${item.source_type}`,
@@ -334,6 +366,49 @@ async function enrichImageItem(item: FullItem, relativePath: string): Promise<En
   }
 
   return { ok: true, summaryHint: 'OCR + summary' };
+}
+
+async function enrichFromExtractedText(
+  item: FullItem,
+  rawText: string,
+  sourceLabel: string,
+): Promise<EnrichOutcome> {
+  if (rawText.length === 0) {
+    return { ok: true, summaryHint: `${sourceLabel} (no text extracted, skipped summary)` };
+  }
+
+  // Write raw text as transcript (reuses the 'transcript' content_type for
+  // any raw file-level extraction: PDF text, audio, video transcripts).
+  addContent(item.id, {
+    content_type: 'transcript',
+    text: rawText,
+    source_agent: 'processor',
+  });
+
+  // Summarize + headline (graceful Ollama degradation)
+  if (rawText.length >= 100) {
+    try {
+      const summary = await summarize(rawText);
+      if (summary) {
+        addContent(item.id, {
+          content_type: 'ai_summary',
+          text: summary,
+          source_agent: 'processor',
+        });
+      }
+      if (isGenericTitle(item.title)) {
+        const h = await headline(rawText);
+        if (h) {
+          const db = _getTestDb();
+          db.prepare(`UPDATE library_items SET title = ? WHERE id = ?`).run(h.slice(0, 200), item.id);
+        }
+      }
+    } catch (err) {
+      logger.warn({ err, itemId: item.id }, 'Processor: Ollama call failed during summarization, continuing');
+    }
+  }
+
+  return { ok: true, summaryHint: `${sourceLabel} + summary` };
 }
 
 /**
